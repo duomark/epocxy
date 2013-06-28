@@ -1,7 +1,5 @@
-dk_cxy
-======
-
-DuoMark Erlang Concurrency Tools
+DuoMark Erlang Concurrency Tools (dk_cxy)
+=========================================
 
 Erlang/OTP offers many components for distributed, concurrent, fault-tolerant, non-stop services. Many concurrent systems need common constructs which are not provided in the basic OTP system. This library is an Open Source set of concurrency tools which have been proven in a production environment and are being released publicly in anticipation that community interest and contributions will lead to the most useful tools being submitted for inclusion in Erlang/OTP.
 
