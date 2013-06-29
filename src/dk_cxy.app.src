@@ -1,0 +1,15 @@
+%%-*- mode: erlang -*-
+%% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% ex: ts=4 sw=4 et
+
+{application, dk_cxy,
+ [
+  {id, "dk_cxy"},
+  {vsn, "1.0.0"},
+  {description, "DuoMark concurrency tools"},
+  {modules,      [ets_buffer]},
+  {registered,   []},
+  {applications, [kernel, stdlib, sasl]},
+  {included_applications, []},
+  {env, []}
+ ]}.
