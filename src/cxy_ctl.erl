@@ -1,11 +1,13 @@
 %%%------------------------------------------------------------------------------
 %%% @copyright (c) 2013, DuoMark International, Inc.
-%%% @author Jay Nelson <jay@duomark.com>
+%%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
+%%% @reference 2013 Development sponsored by TigerText [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
-%%%   Erlang/SP concurrency control utilities.
-%%% @since v0.0.2
+%%%   Concurrency limiter, caps number of processes based on user config,
+%%%   reverts to inline execution when demand is too high.
+%%% @since 0.9.0
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(cxy_ctl).

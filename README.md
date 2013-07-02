@@ -3,7 +3,7 @@ DuoMark Erlang Concurrency Tools
 
 Erlang/OTP offers many components for distributed, concurrent, fault-tolerant, non-stop services. Many concurrent systems need common constructs which are not provided in the basic OTP system. This library is an Open Source set of concurrency tools which have been proven in a production environment and are being released publicly in anticipation that community interest and contributions will lead to the most useful tools being submitted for inclusion in Erlang/OTP.
 
-This library is released under a "Modified BSD License". The library was sponsored by [TigerText](http://tigertext.com/) and validated on their HIPAA-compliant secure text XMPP servers in a production environment handling more than 1M messages per day.
+This library is released under a "Modified BSD License". The library was sponsored by [TigerText](http://tigertext.com/) during 2013, and was validated on their HIPAA-compliant secure text XMPP servers in a production environment handling more than 1M messages per day.
 
 
 ETS (Erlang Term Storage)

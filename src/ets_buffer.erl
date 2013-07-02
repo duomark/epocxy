@@ -1,11 +1,12 @@
 %%%------------------------------------------------------------------------------
 %%% @copyright (c) 2013, DuoMark International, Inc.
-%%% @author Jay Nelson <jay@duomark.com>
+%%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
+%%% @reference 2013 Development sponsored by TigerText [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
 %%%   ETS buffers implement ring, FIFO and LIFO access.
-%%% @since v1.0.0
+%%% @since 0.9.0
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(ets_buffer).
