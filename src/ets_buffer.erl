@@ -112,7 +112,8 @@ list(Buffer_Name) ->
 %% @doc Initialize or add to a single ETS table with multiple named buffers.
 create(Init_Data) ->
     Tid = ets:info(?MODULE, named_table) =/= undefined
-        orelse ets:new(?MODULE, [named_table, ordered_set, public, {keypos, 2}]),
+        orelse ets:new(?MODULE, [named_table, ordered_set, public, {keypos, 2},
+                                 {write_concurrency, true}]),
     _ = [begin
              Buffer_Meta = make_buffer_meta(Buffer_Name, Buffer_Type, Buffer_Size),
              ets:insert_new(?MODULE, Buffer_Meta)
