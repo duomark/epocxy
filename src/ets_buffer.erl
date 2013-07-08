@@ -1,7 +1,7 @@
 %%%------------------------------------------------------------------------------
 %%% @copyright (c) 2013, DuoMark International, Inc.
 %%% @author Jay Nelson <jay@duomark.com> [http://duomark.com/]
-%%% @reference 2013 Development sponsored by TigerText [http://tigertext.com/]
+%%% @reference 2013 Development sponsored by TigerText, Inc. [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
