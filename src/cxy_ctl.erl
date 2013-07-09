@@ -88,35 +88,31 @@ update_inline_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
 
 init(Limits) ->
     %% Validate Limits and construct ring buffer params for each concurrency type...
-    case lists:foldl(fun({Type, Max_Procs = unlimited, History_Count}, {Buffer_Params, Cxy_Params, Errors})
-                           when is_atom(Type), is_integer(History_Count), History_Count >= 0 ->
-                             {make_buffer_params(Buffer_Params, Type, History_Count),
-                              make_proc_params(Cxy_Params, Type, Max_Procs, History_Count), Errors};
-
-                        ({Type, Max_Procs = inline_only, History_Count}, {Buffer_Params, Cxy_Params, Errors})
-                           when is_atom(Type), is_integer(History_Count), History_Count >= 0 ->
-                             {make_buffer_params(Buffer_Params, Type, History_Count),
-                              make_proc_params(Cxy_Params, Type, Max_Procs, History_Count), Errors};
-
-                        ({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors})
-                           when is_atom(Type), is_integer(Max_Procs), is_integer(History_Count),
-                                Max_Procs >= 0, History_Count >= 0 ->
-                             {make_buffer_params(Buffer_Params, Type, History_Count),
-                              make_proc_params(Cxy_Params, Type, Max_Procs, History_Count), Errors};
-
-                        (Invalid, {Buffer_Params, Cxy_Params, Errors}) ->
-                             {Buffer_Params, Cxy_Params, [Invalid | Errors]}
-
-                     end, {[], [], []}, Limits) of
-
+    case lists:foldl(fun(Args, Acc) -> valid_limits(Args, Acc) end, {[], [], []}, Limits) of
         { Buffer_Params,  Cxy_Params,     []} -> do_init(Buffer_Params, Cxy_Params);
         {_Buffer_Params, _Cxy_Params, Errors} -> {error, {invalid_init_args, lists:reverse(Errors)}}
     end.
 
+valid_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors})
+  when is_atom(Type), is_integer(History_Count), History_Count >= 0,
+       (Max_Procs =:= unlimited orelse Max_Procs =:= inline_only) ->
+    make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors});
+valid_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors})
+  when is_atom(Type), is_integer(Max_Procs), is_integer(History_Count),
+       Max_Procs >= 0, History_Count >= 0 ->
+    make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors});
+valid_limits(Invalid, {Buffer_Params, Cxy_Params, Errors}) ->
+    {Buffer_Params, Cxy_Params, [Invalid | Errors]}.
+
+make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors}) ->
+    {make_buffer_params(Buffer_Params, Type, History_Count),
+     make_proc_params(Cxy_Params, Type, Max_Procs, History_Count), Errors}.
+    
+
 make_buffer_spawn(Type)  -> list_to_atom("spawn_"  ++ atom_to_list(Type)).
 make_buffer_inline(Type) -> list_to_atom("inline_" ++ atom_to_list(Type)).
 make_buffer_names(Type) -> {make_buffer_spawn(Type), make_buffer_inline(Type)}.
-    
+
 make_buffer_params(Acc, _Type, 0) -> Acc;
 make_buffer_params(Acc,  Type, Max_History) ->
     {Spawn_Type, Inline_Type} = make_buffer_names(Type),

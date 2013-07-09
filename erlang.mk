@@ -133,10 +133,10 @@ CT_RUN = ct_run \
 	-noshell \
 	-pa ebin $(DEPS_DIR)/*/ebin \
 	-dir test \
-	-logdir logs
-#	-cover test/cover.spec
+	-logdir logs \
+	-cover test/$(PROJECT).coverspec
 
-CT_SUITES ?=
+CT_SUITES = cxy_ctl
 CT_SUITES_FULL = $(addsuffix _SUITE,$(CT_SUITES))
 
 tests: ERLC_OPTS += -DTEST=1 +'{parse_transform, eunit_autoexport}'

@@ -1,0 +1,4 @@
+{export, "./dk_cxy/logs/cover"}.
+{incl_mods, [cxy_ctl]}.
+{level, details}.
+{incl_dirs, ["src/"]}.
