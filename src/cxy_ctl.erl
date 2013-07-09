@@ -230,30 +230,45 @@ concurrency_types() ->
 -type inline_history_result() :: {inline_execs, [proplists:proplist()]}.
 -type history_result() :: {spawn_history_result(), inline_history_result()}.
 
--spec history(atom()) -> history_result().
+-spec history(atom()) -> history_result() | not_implemented_yet | {missing_ets_buffer, atom()}.
 -spec history(atom(), inline | spawn, pos_integer())
-             -> inline_history_result() | spawn_history_result().
+             -> inline_history_result() | spawn_history_result() | not_implemented_yet | {missing_ets_buffer, atom()}.
 
 %% @doc Provide all the performance history for a given task_type.
 history(Task_Type) ->
     {Spawn_Type, Inline_Type} = make_buffer_names(Task_Type),
-    {{spawn_execs,  get_buffer_times(Spawn_Type)},
-     {inline_execs, get_buffer_times(Inline_Type)}}.
+    case get_buffer_times(Spawn_Type) of
+        Spawn_Times_List when is_list(Spawn_Times_List) ->
+            {{spawn_execs, Spawn_Times_List },
+             {inline_execs, get_buffer_times(Inline_Type)}};
+        Error -> Error
+    end.
 
 %% @doc Provide the most recent performance history for a given task_type.
 history(Task_Type, inline, Num_Items) ->
     Inline_Type = make_buffer_inline(Task_Type),
-    {inline_execs, get_buffer_times(Inline_Type, Num_Items)};
+    case get_buffer_times(Inline_Type, Num_Items) of
+        Inline_Times_List when is_list(Inline_Times_List) -> {inline_execs, Inline_Times_List};
+        Error -> Error
+    end;
 history(Task_Type, spawn, Num_Items) ->
     Spawn_Type = make_buffer_spawn(Task_Type),
-    {spawn_execs, get_buffer_times(Spawn_Type, Num_Items)}.
-
+    case get_buffer_times(Spawn_Type, Num_Items) of
+        Spawn_Times_List when is_list(Spawn_Times_List) -> {spawn_execs, Spawn_Times_List};
+        Error -> Error
+    end.
 
 get_buffer_times(Buffer_Name) ->
-    [format_buffer_times(Times) || Times <- ets_buffer:history(Buffer_Name)].
+    case ets_buffer:history(Buffer_Name) of
+        Times_List when is_list(Times_List) -> [format_buffer_times(Times) || Times <- Times_List];
+        Error -> Error
+    end.
 
 get_buffer_times(Buffer_Name, Num_Items) ->
-    [format_buffer_times(Times) || Times <- ets_buffer:history(Buffer_Name, Num_Items)].
+    case ets_buffer:history(Buffer_Name, Num_Items) of
+        Times_List when is_list(Times_List) -> [format_buffer_times(Times) || Times <- Times_List];
+        Error -> Error
+    end.
 
 format_buffer_times({Task_Fun, {_,_,Micro} = Start, Spawn_Elapsed, Exec_Elapsed}) ->
     [{task_fun, Task_Fun}, {start, calendar:now_to_universal_time(Start), Micro},
