@@ -90,15 +90,17 @@ buffer_data(Name, Loc, Data) ->
 %%% External API for colocated ets_buffers (in a single ?MODULE ets table)
 %%%------------------------------------------------------------------------------
 
+-type buffer_error() :: not_implemented_yet | {missing_ets_buffer, buffer_name()}.
+
 -spec list() -> proplists:proplist().
 -spec list(buffer_name()) -> proplists:proplist().
 -spec create([{buffer_name(), buffer_type(), buffer_size()}]) -> ets_buffer.
 -spec clear(buffer_name()) -> boolean().
 -spec delete(buffer_name()) -> boolean().
 
--spec write(buffer_name(), buffer_data()) -> true | not_implemented_yet.
--spec history(buffer_name()) -> [buffer_data()].
--spec history(buffer_name(), pos_integer()) -> [buffer_data()].
+-spec write(buffer_name(), buffer_data()) -> true | buffer_error().
+-spec history(buffer_name()) -> [buffer_data()] | buffer_error().
+-spec history(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
 
 
 %% @doc Get a set of proplists for all buffers in the shared ets table.
@@ -128,12 +130,12 @@ make_buffer_meta(Buffer_Name, Buffer_Type, Buffer_Size)
 
 %% @doc Remove all entries from a specific buffer, but keep the empty buffer.
 clear(Buffer_Name) ->
-    clear(?MODULE, Buffer_Name).
+    clear(?MODULE, Buffer_Name) =:= true.
 
 %% @doc Remove all entries and delete a specific buffer.
 delete(Buffer_Name) ->
-    clear(?MODULE, Buffer_Name),
-    ets:delete(?MODULE, Buffer_Name).
+    clear(?MODULE, Buffer_Name) =:= true
+        andalso ets:delete(?MODULE, Buffer_Name).
 
 %% @doc Write data to the buffer following the semantics of the buffer type.
 write(Buffer_Name, Data) ->
@@ -191,8 +193,8 @@ clear_unique(Buffer_Name) ->
 
 %% @doc Remove all entries and delete a specific buffer.
 delete_unique(Buffer_Name) ->
-    clear(Buffer_Name, Buffer_Name),
-    ets:delete(Buffer_Name, Buffer_Name).
+    clear(Buffer_Name, Buffer_Name) =:= true
+        andalso ets:delete(Buffer_Name, Buffer_Name).
 
 %% @doc Write data to the named ets buffer table following the semantics of the buffer type.
 write_unique(Buffer_Name, Data) ->
@@ -218,40 +220,55 @@ history_unique(Buffer_Name, Num_Items) ->
 %%%------------------------------------------------------------------------------
 
 get_buffer_type(Table_Name, Buffer_Name) ->
-    ets:update_counter(Table_Name, Buffer_Name, [{#ets_buffer.type, 0}, {#ets_buffer.size, 0}]).
+    try ets:update_counter(Table_Name, Buffer_Name, [{#ets_buffer.type, 0}, {#ets_buffer.size, 0}])
+    catch error:badarg -> false
+    end.
 
 get_buffer_type_and_pos(Table_Name, Buffer_Name) ->
-    ets:update_counter(Table_Name, Buffer_Name,
-                       [{#ets_buffer.type, 0}, {#ets_buffer.size, 0}, {#ets_buffer.write_loc, 0}]).
+    try ets:update_counter(Table_Name, Buffer_Name, [{#ets_buffer.type, 0}, {#ets_buffer.size, 0}, {#ets_buffer.write_loc, 0}])
+    catch error:badarg -> false
+    end.
 
 clear(Table_Name, Buffer_Name) ->
-    ets:match_delete(Table_Name, #buffer_data{key=buffer_key(Buffer_Name, '_'), data='_'}),
-    ets:update_element(Table_Name, Buffer_Name, {#ets_buffer.write_loc, 0}).
-    
+    try 
+        ets:match_delete(Table_Name, #buffer_data{key=buffer_key(Buffer_Name, '_'), data='_'}),
+        ets:update_element(Table_Name, Buffer_Name, {#ets_buffer.write_loc, 0})
+    catch error:badarg -> {missing_ets_buffer, Buffer_Name}
+    end.
+
 write(Table_Name, Buffer_Name, Data) ->
-    [Type_Num, Max_Loc] = get_buffer_type(Table_Name, Buffer_Name),
-    case buffer_type(Type_Num) of
-        ring -> Loc = ets:update_counter(Table_Name, Buffer_Name, ring_writer_inc(Max_Loc)),
-                ets:insert(Table_Name, buffer_data(Buffer_Name, Loc, Data));
-        fifo -> not_implemented_yet;
-        lifo -> not_implemented_yet
+    case get_buffer_type(Table_Name, Buffer_Name) of
+        false -> {missing_ets_buffer, Buffer_Name};
+        [Type_Num, Max_Loc] ->
+            case buffer_type(Type_Num) of
+                ring -> Loc = ets:update_counter(Table_Name, Buffer_Name, ring_writer_inc(Max_Loc)),
+                        ets:insert(Table_Name, buffer_data(Buffer_Name, Loc, Data));
+                fifo -> not_implemented_yet;
+                lifo -> not_implemented_yet
+            end
     end.
 
 %% Currently this function assumes the number of items is not excessive and fetches all in one try.
 history_internal(Table_Name, Buffer_Name) ->
-    [Type_Num, Max_Loc, Write_Pos] = get_buffer_type_and_pos(Table_Name, Buffer_Name),
-    case buffer_type(Type_Num) of
-        ring -> history_ring(Table_Name, Buffer_Name, Max_Loc, Write_Pos, Max_Loc);
-        fifo -> not_implemented_yet;
-        lifo -> not_implemented_yet
+    case get_buffer_type_and_pos(Table_Name, Buffer_Name) of
+        false -> {missing_ets_buffer, Buffer_Name};
+        [Type_Num, Max_Loc, Write_Pos] ->
+            case buffer_type(Type_Num) of
+                ring -> history_ring(Table_Name, Buffer_Name, Max_Loc, Write_Pos, Max_Loc);
+                fifo -> not_implemented_yet;
+                lifo -> not_implemented_yet
+            end
     end.
 
 history_internal(Table_Name, Buffer_Name, Num_Items) ->
-    [Type_Num, Max_Loc, Write_Pos] = get_buffer_type_and_pos(Table_Name, Buffer_Name),
-    case buffer_type(Type_Num) of
-        ring -> history_ring(Table_Name, Buffer_Name, Num_Items, Write_Pos, Max_Loc);
-        fifo -> not_implemented_yet;
-        lifo -> not_implemented_yet
+    case get_buffer_type_and_pos(Table_Name, Buffer_Name) of
+        false -> {missing_ets_buffer, Buffer_Name};
+        [Type_Num, Max_Loc, Write_Pos] ->
+            case buffer_type(Type_Num) of
+                ring -> history_ring(Table_Name, Buffer_Name, Num_Items, Write_Pos, Max_Loc);
+                fifo -> not_implemented_yet;
+                lifo -> not_implemented_yet
+            end
     end.
 
 history_ring(_Table_Name, _Buffer_Name, _Num_Items, 0, _Max_Loc) -> [];
