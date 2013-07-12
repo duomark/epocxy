@@ -26,8 +26,8 @@
          clear/1, delete/1, list/0, list/1,
 
          %% API when each buffer is in a dedicated named ets table.
-         create_unique/3, write_unique/2, history_unique/1, history_unique/2,
-         clear_unique/1, delete_unique/1, list_unique/1
+         create_dedicated/3, write_dedicated/2, history_dedicated/1, history_dedicated/2,
+         clear_dedicated/1, delete_dedicated/1, list_dedicated/1
         ]).
 
 -type buffer_name() :: atom().
@@ -160,18 +160,18 @@ history(Buffer_Name, Num_Items) ->
 %%% External API for separately named ets_buffers (one per ets table)
 %%%------------------------------------------------------------------------------
 
--spec list_unique(buffer_name()) -> proplists:proplist().
--spec create_unique(buffer_name(), buffer_type(), buffer_size()) -> buffer_name().
--spec clear_unique(buffer_name()) -> boolean().
--spec delete_unique(buffer_name()) -> boolean().
+-spec list_dedicated(buffer_name()) -> proplists:proplist().
+-spec create_dedicated(buffer_name(), buffer_type(), buffer_size()) -> buffer_name().
+-spec clear_dedicated(buffer_name()) -> boolean().
+-spec delete_dedicated(buffer_name()) -> boolean().
 
--spec write_unique(buffer_name(), any()) -> true | not_implemented_yet.
--spec history_unique(buffer_name()) -> [buffer_data()].
--spec history_unique(buffer_name(), pos_integer()) -> [buffer_data()].
+-spec write_dedicated(buffer_name(), any()) -> true | not_implemented_yet.
+-spec history_dedicated(buffer_name()) -> [buffer_data()].
+-spec history_dedicated(buffer_name(), pos_integer()) -> [buffer_data()].
 
 
 %% @doc Get a single proplist for the buffer in a named ets table.
-list_unique(Buffer_Name) ->
+list_dedicated(Buffer_Name) ->
     [Buffer] = all_buffers(Buffer_Name),
     make_buffer_proplist(Buffer).
 
@@ -181,37 +181,37 @@ list_unique(Buffer_Name) ->
 %%   ets table would be too high, or when independent ets life cycle
 %%   provides a quicker way to eliminate buffer memory.
 %% @end
-create_unique(Buffer_Name, Buffer_Type, Buffer_Size) ->
-    Tid = ets:new(Buffer_Name, [named_table, ordered_set, public]),
+create_dedicated(Buffer_Name, Buffer_Type, Buffer_Size) ->
+    Tid = ets:new(Buffer_Name, [named_table, ordered_set, public, {write_concurrency, true}]),
     Buffer_Meta = make_buffer_meta(Buffer_Name, Buffer_Type, Buffer_Size),
     ets:insert_new(Buffer_Name, Buffer_Meta),
     Tid.
 
 %% @doc Remove all entries from a specific buffer, but keep the empty buffer.
-clear_unique(Buffer_Name) ->
+clear_dedicated(Buffer_Name) ->
     clear(Buffer_Name, Buffer_Name).
 
 %% @doc Remove all entries and delete a specific buffer.
-delete_unique(Buffer_Name) ->
+delete_dedicated(Buffer_Name) ->
     clear(Buffer_Name, Buffer_Name) =:= true
         andalso ets:delete(Buffer_Name, Buffer_Name).
 
 %% @doc Write data to the named ets buffer table following the semantics of the buffer type.
-write_unique(Buffer_Name, Data) ->
+write_dedicated(Buffer_Name, Data) ->
     write(Buffer_Name, Buffer_Name, Data).
 
 %% @doc
 %%   Return all buffered data which is still present in a named ets buffer table,
 %%   even if previously read. The order of the list is from oldest item to newest item.
 %% @end
-history_unique(Buffer_Name) ->
+history_dedicated(Buffer_Name) ->
     history_internal(Buffer_Name, Buffer_Name).
 
 %% @doc
 %%   Return the last N buffered items still present in a named ets buffer table,
 %%   even if previously read. The order of the list is from oldest item to newest item.
 %% @end
-history_unique(Buffer_Name, Num_Items) ->
+history_dedicated(Buffer_Name, Num_Items) ->
     history_internal(Buffer_Name, Buffer_Name, Num_Items).
 
 
