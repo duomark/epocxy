@@ -226,9 +226,9 @@ concurrency_types() ->
 -type inline_history_result() :: {inline_execs, [proplists:proplist()]}.
 -type history_result() :: {spawn_history_result(), inline_history_result()}.
 
--spec history(atom()) -> history_result() | not_implemented_yet | {missing_ets_buffer, atom()}.
+-spec history(atom()) -> history_result() | ets_buffer:buffer_error().
 -spec history(atom(), inline | spawn, pos_integer())
-             -> inline_history_result() | spawn_history_result() | not_implemented_yet | {missing_ets_buffer, atom()}.
+             -> inline_history_result() | spawn_history_result() | ets_buffer:buffer_error().
 
 %% @doc Provide all the performance history for a given task_type.
 history(Task_Type) ->
