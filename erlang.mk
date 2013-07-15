@@ -136,7 +136,7 @@ CT_RUN = ct_run \
 	-logdir logs \
 	-cover test/$(PROJECT).coverspec
 
-CT_SUITES = cxy_ctl
+CT_SUITES = ets_buffer cxy_ctl
 CT_SUITES_FULL = $(addsuffix _SUITE,$(CT_SUITES))
 
 tests: ERLC_OPTS += -DTEST=1 +'{parse_transform, eunit_autoexport}'
