@@ -19,13 +19,13 @@ These benefits make ETS tables one of the most useful OTP constructs in building
 Buffers
 -------
 
-FIFO, LIFO and Circular buffers are very useful in absorbing data from a source stream when the processing time is exceeded by the amount of data being supplied. If the difference in time and volume is not excessive, or the loss of data is inconsequential, an in-memory buffer can provide a smooth intermediate location for data in transit. If the volume becomes excessive, an alternative persistent data store may be needed.
+FIFO, LIFO and Ring buffers are very useful in absorbing data from a source stream when the processing time is exceeded by the amount of data being supplied. If the difference in time and volume is not excessive, or the loss of data is inconsequential, an in-memory buffer can provide a smooth intermediate location for data in transit. If the volume becomes excessive, an alternative persistent data store may be needed.
 
 OTP provides no explicit buffer tools, although it does provide queues and lists. These algorithms only allow serial access when they are embedded inside a process. Implementing buffers with an ets table allows multiple processes to access the buffer directly (although internal locks and the sequential nature of buffers prevent actual concurrent access) and operate in a more efficient and approximately concurrent manner.
 
 The message queues of processes are naturally FIFO queues, with the additional feature of being able to scan through them using selective receive to find the first occurrence of a particular message pattern. LIFO queues cannot be efficiently modeled using just the built in message queue of an erlang process.
 
-ETS buffers allow independent readers and writes to access data simultaneously through distinct read and write index counters which are atomically updated. A circular buffer is extremely useful under heavy load situations for recording a data window of most recent activity. It is light weight in its processing needs, limits the amount of memory used at the cost of overwriting older data, and allows read access completely independent of any writers. It is often used to record information in realtime for later offline analysis.
+ETS buffers allow independent readers and writes to access data simultaneously through distinct read and write index counters which are atomically updated. A ring buffer is extremely useful under heavy load situations for recording a data window of the most recent activity. It is light weight in its processing needs, limits the amount of memory used at the cost of overwriting older data, and allows read access completely independent of any writers. It is often used to record information in realtime for later offline analysis.
 
 
 Concurrency Control
@@ -33,7 +33,7 @@ Concurrency Control
 
 Most distributed systems need dynamic adaptation to traffic demand, however, there are limits to how much concurrency they can handle without overloading and causing failure. Most teams employ pooling as a solution to this problem, treating processes as a limited resource allocation problem. This approach is overly complicated, turns out to not be very concurrent because of the central management of resource allocation, can introduce latent errors by recycling previously used processes (beware of process dictionary garbage!), and leads to message queue overload and cascading timeout failures under heavy pressure.
 
-A more lightweight approach is to limit concurrency via a governor on the number of processes active. When the limit is exceeded functions are executed inline rather than spawned, thus providing much needed backpressure on the source of the concurrency requests. The governor here is implemented as a counter in an ETS table with optional execution performance times recorded in a circular buffer residing in the same ETS table.
+A more lightweight approach is to limit concurrency via a governor on the number of processes active. When the limit is exceeded functions are executed inline rather than spawned, thus providing much needed backpressure on the source of the concurrency requests. The governor here is implemented as a counter in an ETS table with optional execution performance times recorded in a ring buffer residing in the same ETS table.
 
 
 Caches
