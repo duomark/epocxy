@@ -4,6 +4,7 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([
+         check_shared_error/1,   check_dedicated_error/1,
          check_shared_create/1,  check_dedicated_create/1,
          check_shared_history/1, check_dedicated_history/1,
          check_shared_clear/1,   check_dedicated_clear/1,
@@ -15,6 +16,7 @@
 -spec all() -> [atom()].
 
 all() -> [
+          check_shared_error,   check_dedicated_error,
           check_shared_create,  check_dedicated_create,
           check_shared_history, check_dedicated_history,
           check_shared_clear,   check_dedicated_clear,
@@ -30,27 +32,80 @@ end_per_suite(Config)  -> Config.
 
 %% Test Modules is ?TM
 -define(TM, ets_buffer).
+-define(ATTRS, [name, size, type, reserve_loc, write_loc, read_loc]).
 
+check_shared_error(_Config) ->
+    Tab1 = foo,
+    Tab2 = bar,
+    [] = ?TM:list(),
+    [] = ?TM:list(Tab1),
+    [] = ?TM:list(Tab2),
+
+    ?TM = ?TM:create(Tab1, ring, 20),
+    [[Tab1, 20, ring, 0, 0, 0]] = [[proplists:get_value(P, Props) || P <- ?ATTRS]
+                                   || Props <- ?TM:list()],
+    true = ?TM:write(Tab1, 15),
+    [15] = ?TM:history(Tab1),
+    [15] = ?TM:history(Tab1, 5),
+    [15] = ?TM:read(Tab1),
+
+    [] = ?TM:list(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:write(Tab2, 16),
+    {missing_ets_buffer, Tab2} = ?TM:history(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:history(Tab2, 5),
+    {missing_ets_buffer, Tab2} = ?TM:read(Tab2),
+
+    true = ?TM:clear(Tab1),
+    true = ?TM:delete(Tab1),
+    false = ?TM:clear(Tab2),
+    false = ?TM:delete(Tab2),
+    ok.
+
+check_dedicated_error(_Config) ->
+    Tab1 = foo,
+    Tab2 = bar,
+    [] = ?TM:list_dedicated(Tab1),
+    [] = ?TM:list_dedicated(Tab2),
+
+    Tab1 = ?TM:create_dedicated(Tab1, ring, 20),
+    Props = ?TM:list_dedicated(Tab1),
+    [Tab1, 20, ring, 0, 0, 0] = [proplists:get_value(P, Props) || P <- ?ATTRS],
+    true = ?TM:write_dedicated(Tab1, 15),
+    [15] = ?TM:history_dedicated(Tab1),
+    [15] = ?TM:history_dedicated(Tab1, 5),
+    [15] = ?TM:read_dedicated(Tab1),
+
+    [] = ?TM:list_dedicated(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:write_dedicated(Tab2, 16),
+    {missing_ets_buffer, Tab2} = ?TM:history_dedicated(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:history_dedicated(Tab2, 5),
+    {missing_ets_buffer, Tab2} = ?TM:read_dedicated(Tab2),
+
+    true = ?TM:clear_dedicated(Tab1),
+    true = ?TM:delete_dedicated(Tab1),
+    {missing_ets_buffer, Tab2} = ?TM:clear_dedicated(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:delete_dedicated(Tab2),
+    ok.
+    
 check_shared_create(_Config) ->
     Tab1 = ets_tests,
     Tab2 = batches,
-    Attrs = [name, size, type, write_loc, read_loc],
     [] = ?TM:list(),
     undefined = ets:info(?TM, name),
     ?TM = ?TM:create(Tab1, ring, 20),
     ?TM = ets:info(?TM, name),
-    [[Tab1, 20, ring, 0, 0]]
-        = [[proplists:get_value(P, Props) || P <- Attrs]
+    [[Tab1, 20, ring, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
     ?TM = ?TM:create(Tab2, fifo),
-    [[Tab2, 0, fifo, 0, 0], [Tab1, 20, ring, 0, 0]]
-        = [[proplists:get_value(P, Props) || P <- Attrs]
+    [[Tab2, 0, fifo, 0, 0, 0], [Tab1, 20, ring, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
     
     Props1 = ?TM:list(Tab1),
-    [Tab1, 20, ring, 0, 0] = [proplists:get_value(P, Props1) || P <- Attrs],
+    [Tab1, 20, ring, 0, 0, 0] = [proplists:get_value(P, Props1) || P <- ?ATTRS],
     Props2 = ?TM:list(Tab2),
-    [Tab2,  0, fifo, 0, 0] = [proplists:get_value(P, Props2) || P <- Attrs],
+    [Tab2,  0, fifo, 0, 0, 0] = [proplists:get_value(P, Props2) || P <- ?ATTRS],
 
     true = ?TM:delete(Tab1),
     true = ?TM:delete(Tab2),
@@ -60,7 +115,6 @@ check_shared_create(_Config) ->
 check_dedicated_create(_Config) ->
     Tab1 = ets_tests,
     Tab2 = batches,
-    Attrs = [name, size, type, write_loc, read_loc],
     [] = ?TM:list(),
     undefined = ets:info(?TM, name),
     undefined = ets:info(Tab1, name),
@@ -68,12 +122,12 @@ check_dedicated_create(_Config) ->
     undefined = ets:info(?TM, name),
     Tab1 = ets:info(Tab1, name),
     Props1 = ?TM:list_dedicated(Tab1),
-    [Tab1, 20, ring, 0, 0]
-        = [proplists:get_value(P, Props1) || P <- Attrs],
+    [Tab1, 20, ring, 0, 0, 0]
+        = [proplists:get_value(P, Props1) || P <- ?ATTRS],
     Tab2 = ?TM:create_dedicated(Tab2, fifo),
     Props2 = ?TM:list_dedicated(Tab2),
-    [Tab2, 0, fifo, 0, 0]
-        = [proplists:get_value(P, Props2) || P <- Attrs],
+    [Tab2, 0, fifo, 0, 0, 0]
+        = [proplists:get_value(P, Props2) || P <- ?ATTRS],
 
     true = ?TM:delete_dedicated(Tab1),
     true = ?TM:delete_dedicated(Tab2),
@@ -168,7 +222,6 @@ check_dedicated_history(_Config) ->
     ok.
 
 check_shared_clear(_Config) ->
-    Attrs = [name, size, type, write_loc, read_loc],
     Tab_Specs = [{Tab1, Type1}, {Tab2, Type2, Size2}, {Tab3, Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
     [] = ?TM:list(),
@@ -179,8 +232,8 @@ check_shared_clear(_Config) ->
         = [ets:info(Tab, name) || Tab <- [?TM] ++ [element(1,Spec) || Spec <- Tab_Specs]],
 
     %% Entries are sorted by table name.
-    [[Tab2, Size2, Type2, 0, 0], [Tab1, 0, Type1, 0, 0], [Tab3, 0, Type3, 0, 0]]
-        = [[proplists:get_value(P, Props) || P <- Attrs]
+    [[Tab2, Size2, Type2, 0, 0, 0], [Tab1, 0, Type1, 0, 0, 0], [Tab3, 0, Type3, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
 
     Data = [{Tab1, {red, 2}}, {Tab1, {golden, 1}}, {Tab2, {macintosh, 34}}, {Tab3, {purple, 5}}],
@@ -188,8 +241,8 @@ check_shared_clear(_Config) ->
     [?TM, 7] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% 3 meta + 4 data
 
     %% Entries are sorted by table name.
-    [[Tab2, Size2, Type2, 1, 0], [Tab1, 0, Type1, 2, 0], [Tab3, 0, Type3, -1, -1]]
-        = [[proplists:get_value(P, Props) || P <- Attrs]
+    [[Tab2, Size2, Type2, 1, 1, 0], [Tab1, 0, Type1, 2, 2, 0], [Tab3, 0, Type3, -1, -1, -1]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
     
     [true, true, true] = [?TM:clear(Tab) || Tab <- [Tab1, Tab2, Tab3]],
@@ -199,7 +252,6 @@ check_shared_clear(_Config) ->
     ok.
 
 check_dedicated_clear(_Config) ->
-    Attrs = [name, size, type, write_loc, read_loc],
     Tab_Specs = [{Tab1, Type1}, {Tab2, Type2, Size2}, {Tab3, Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
     [[], [], []] = [?TM:list_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
@@ -216,8 +268,8 @@ check_dedicated_clear(_Config) ->
     [undefined, Tab1, Tab2, Tab3]
         = [ets:info(Tab, name) || Tab <- [?TM, Tab1, Tab2, Tab3]],
 
-    [[Tab1, 0, Type1, 0, 0], [Tab2, Size2, Type2, 0, 0], [Tab3, 0, Type3, 0, 0]]
-        = [[proplists:get_value(P, Props) || P <- Attrs]
+    [[Tab1, 0, Type1, 0, 0, 0], [Tab2, Size2, Type2, 0, 0, 0], [Tab3, 0, Type3, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- [?TM:list_dedicated(T) || T <- [Tab1, Tab2, Tab3]]],
 
     Data = [{Tab1, {red, 2}}, {Tab1, {golden, 1}}, {Tab2, {macintosh, 34}}, {Tab3, {purple, 5}}],
@@ -225,8 +277,8 @@ check_dedicated_clear(_Config) ->
     [[undefined, undefined], [Tab1, 3], [Tab2, 2], [Tab3, 2]]
         = [[ets:info(Tab, Prop) || Prop <- [name, size]] || Tab <- [?TM, Tab1, Tab2, Tab3]],
 
-    [[Tab1, 0, Type1, 2, 0], [Tab2, Size2, Type2, 1, 0], [Tab3, 0, Type3, -1, -1]]
-        = [[proplists:get_value(P, Props) || P <- Attrs]
+    [[Tab1, 0, Type1, 2, 2, 0], [Tab2, Size2, Type2, 1, 1, 0], [Tab3, 0, Type3, -1, -1, -1]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- [?TM:list_dedicated(T) || T <- [Tab1, Tab2, Tab3]]],
     
     [true, true, true] = [?TM:clear_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],

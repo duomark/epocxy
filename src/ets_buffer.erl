@@ -187,7 +187,7 @@ ring_reserve_write_cmd(Max)                              -> [{#ets_buffer.reserv
 ring_publish_write_cmd(Max,  Reserve_Loc,  Reserve_Loc)  -> [{#ets_buffer.write_loc,   1, Max, 1}, {#ets_buffer.read_loc, 1, Max, 1}];
 ring_publish_write_cmd(Max, _Reserve_Loc, _Old_Read_Loc) ->  {#ets_buffer.write_loc,   1, Max, 1}.
 
-%% Increment read pointer [but return 'try_again' if the read pointer has moved already].
+%% Increment read pointer
 ring_reserve_read_cmd(Num_Items, Write_Loc, Max_Loc, Read_Loc) ->
     case Write_Loc >= Read_Loc of
         true  -> [{#ets_buffer.read_loc, 0}, {#ets_buffer.read_loc, Num_Items, Write_Loc-1, Write_Loc}];
@@ -388,7 +388,9 @@ clear_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 
 %% @doc Delete the entire dedicate ets table.
 delete_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
-    ets:delete(Buffer_Name).
+    try   ets:delete(Buffer_Name)
+    catch error:badarg -> {missing_ets_buffer, Buffer_Name}
+    end.
 
 %% @doc Write data to the named ets buffer table following the semantics of the buffer type.
 write_dedicated(Buffer_Name, Data) when is_atom(Buffer_Name) ->
