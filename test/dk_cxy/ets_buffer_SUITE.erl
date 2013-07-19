@@ -9,7 +9,8 @@
          check_shared_history/1,    check_dedicated_history/1,
          check_shared_clear/1,      check_dedicated_clear/1,
          check_shared_read/1,       check_dedicated_read/1,
-         check_shared_fifo_edges/1, check_dedicated_fifo_edges/1
+         check_shared_fifo_edges/1, check_dedicated_fifo_edges/1,
+         check_shared_lifo_edges/1, check_dedicated_lifo_edges/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -22,7 +23,8 @@ all() -> [
           check_shared_history,    check_dedicated_history,
           check_shared_clear,      check_dedicated_clear,
           check_shared_read,       check_dedicated_read,
-          check_shared_fifo_edges, check_dedicated_fifo_edges
+          check_shared_fifo_edges, check_dedicated_fifo_edges,
+          check_shared_lifo_edges, check_dedicated_lifo_edges
          ].
 
 -type config() :: proplists:proplist().
@@ -400,7 +402,7 @@ check_shared_fifo_edges(_Config) ->
     [{orange, 8}            ] = ?TM:read(Tab1, 1),
     [                       ] = ?TM:read(Tab1, 3),
 
-    true = ?TM:delete(Tab1),
+    [true, true] = [?TM:delete(T) || T <- Tabs],
     ok.
 
 check_dedicated_fifo_edges(_Config) ->    
@@ -427,6 +429,61 @@ check_dedicated_fifo_edges(_Config) ->
     [{golden, 1}, {green, 3}] = ?TM:read_dedicated(Tab1, 2),
     [{orange, 8}            ] = ?TM:read_dedicated(Tab1, 1),
     [                       ] = ?TM:read_dedicated(Tab1, 3),
+
+    [true, true] = [?TM:delete_dedicated(T) || T <- Tabs],
+    ok.
+
+%% LIFO read is only supported 1 record at a time, but maybe in the future...
+check_shared_lifo_edges(_Config) ->    
+    Tabs = [Tab1, Tab2] = [beets, apples],
+    ?TM = ?TM:create([{T, lifo} || T <- Tabs]),
+    
+    %% Read brand new empty buffer...
+    [] = ?TM:read(Tab1),
+    %% [] = ?TM:read(Tab1, 10),
+    [] = ?TM:history(Tab1),
+    [] = ?TM:history(Tab1, 10),
+
+    Data1 = [{Tab1, {red, 2}}, {Tab2, {winesap, 3}}],
+    _ = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
+    [{red,     2}] = ?TM:history(Tab1),
+    [{red,     2}] = ?TM:history(Tab1, 10),
+    [{red,     2}] = ?TM:read(Tab1),
+    %% [{winesap, 3}] = ?TM:read(Tab2, 5),
+    [] = ?TM:history(Tab1),
+    [] = ?TM:history(Tab1, 10),
+
+    Data2 = [{Tab1, {golden, 1}}, {Tab1, {green, 3}}, {Tab1, {orange, 8}}],
+    _ = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
+    [[{orange, 8}], [{green, 3}], [{golden, 1}], []]
+        = [?TM:read(Tab1) || _N <- lists:seq(1,4)],
+
+    [true, true] = [?TM:delete(T) || T <- Tabs],
+    ok.
+
+check_dedicated_lifo_edges(_Config) ->    
+    Tabs = [Tab1, Tab2] = [beets, apples],
+    Tabs = [?TM:create_dedicated(T, lifo) || T <- Tabs],
+    
+    %% Read brand new empty buffer...
+    [] = ?TM:read_dedicated(Tab1),
+    %% [] = ?TM:read_dedicated(Tab1, 10),
+    [] = ?TM:history_dedicated(Tab1),
+    [] = ?TM:history_dedicated(Tab1, 10),
+
+    Data1 = [{Tab1, {red, 2}}, {Tab2, {winesap, 3}}],
+    _ = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
+    [{red,     2}] = ?TM:history_dedicated(Tab1),
+    [{red,     2}] = ?TM:history_dedicated(Tab1, 10),
+    [{red,     2}] = ?TM:read_dedicated(Tab1),
+    %% [{winesap, 3}] = ?TM:read_dedicated(Tab2, 5),
+    [] = ?TM:history_dedicated(Tab1),
+    [] = ?TM:history_dedicated(Tab1, 10),
+
+    Data2 = [{Tab1, {golden, 1}}, {Tab1, {green, 3}}, {Tab1, {orange, 8}}],
+    _ = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
+    [[{orange, 8}], [{green, 3}], [{golden, 1}], []]
+        = [?TM:read_dedicated(Tab1) || _N <- lists:seq(1,4)],
 
     [true, true] = [?TM:delete_dedicated(T) || T <- Tabs],
     ok.
