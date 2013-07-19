@@ -4,11 +4,12 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([
-         check_shared_error/1,   check_dedicated_error/1,
-         check_shared_create/1,  check_dedicated_create/1,
-         check_shared_history/1, check_dedicated_history/1,
-         check_shared_clear/1,   check_dedicated_clear/1,
-         check_shared_read/1,    check_dedicated_read/1
+         check_shared_error/1,      check_dedicated_error/1,
+         check_shared_create/1,     check_dedicated_create/1,
+         check_shared_history/1,    check_dedicated_history/1,
+         check_shared_clear/1,      check_dedicated_clear/1,
+         check_shared_read/1,       check_dedicated_read/1,
+         check_shared_fifo_edges/1, check_dedicated_fifo_edges/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -16,11 +17,12 @@
 -spec all() -> [atom()].
 
 all() -> [
-          check_shared_error,   check_dedicated_error,
-          check_shared_create,  check_dedicated_create,
-          check_shared_history, check_dedicated_history,
-          check_shared_clear,   check_dedicated_clear,
-          check_shared_read,    check_dedicated_read
+          check_shared_error,      check_dedicated_error,
+          check_shared_create,     check_dedicated_create,
+          check_shared_history,    check_dedicated_history,
+          check_shared_clear,      check_dedicated_clear,
+          check_shared_read,       check_dedicated_read,
+          check_shared_fifo_edges, check_dedicated_fifo_edges
          ].
 
 -type config() :: proplists:proplist().
@@ -371,4 +373,60 @@ check_dedicated_read(_Config) ->
     [{purple, 5}] = ?TM:read_dedicated(Tab3),
 
     [true, true, true] = [?TM:delete_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
+    ok.
+
+check_shared_fifo_edges(_Config) ->    
+    Tabs = [Tab1, Tab2] = [beets, apples],
+    ?TM = ?TM:create([{T, fifo} || T <- Tabs]),
+    
+    %% Read brand new empty buffer...
+    [] = ?TM:read(Tab1),
+    [] = ?TM:read(Tab1, 10),
+    [] = ?TM:history(Tab1),
+    [] = ?TM:history(Tab1, 10),
+
+    Data1 = [{Tab1, {red, 2}}, {Tab2, {winesap, 3}}],
+    _ = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
+    [{red,     2}] = ?TM:history(Tab1),
+    [{red,     2}] = ?TM:history(Tab1, 10),
+    [{red,     2}] = ?TM:read(Tab1),
+    [{winesap, 3}] = ?TM:read(Tab2, 5),
+    [] = ?TM:history(Tab1),
+    [] = ?TM:history(Tab1, 10),
+
+    Data2 = [{Tab1, {golden, 1}}, {Tab1, {green, 3}}, {Tab1, {orange, 8}}],
+    _ = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
+    [{golden, 1}, {green, 3}] = ?TM:read(Tab1, 2),
+    [{orange, 8}            ] = ?TM:read(Tab1, 1),
+    [                       ] = ?TM:read(Tab1, 3),
+
+    true = ?TM:delete(Tab1),
+    ok.
+
+check_dedicated_fifo_edges(_Config) ->    
+    Tabs = [Tab1, Tab2] = [beets, apples],
+    Tabs = [?TM:create_dedicated(T, fifo) || T <- Tabs],
+    
+    %% Read brand new empty buffer...
+    [] = ?TM:read_dedicated(Tab1),
+    [] = ?TM:read_dedicated(Tab1, 10),
+    [] = ?TM:history_dedicated(Tab1),
+    [] = ?TM:history_dedicated(Tab1, 10),
+
+    Data1 = [{Tab1, {red, 2}}, {Tab2, {winesap, 3}}],
+    _ = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
+    [{red,     2}] = ?TM:history_dedicated(Tab1),
+    [{red,     2}] = ?TM:history_dedicated(Tab1, 10),
+    [{red,     2}] = ?TM:read_dedicated(Tab1),
+    [{winesap, 3}] = ?TM:read_dedicated(Tab2, 5),
+    [] = ?TM:history_dedicated(Tab1),
+    [] = ?TM:history_dedicated(Tab1, 10),
+
+    Data2 = [{Tab1, {golden, 1}}, {Tab1, {green, 3}}, {Tab1, {orange, 8}}],
+    _ = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
+    [{golden, 1}, {green, 3}] = ?TM:read_dedicated(Tab1, 2),
+    [{orange, 8}            ] = ?TM:read_dedicated(Tab1, 1),
+    [                       ] = ?TM:read_dedicated(Tab1, 3),
+
+    [true, true] = [?TM:delete_dedicated(T) || T <- Tabs],
     ok.
