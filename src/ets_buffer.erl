@@ -141,13 +141,11 @@ make_buffer_proplist(#ets_buffer{name={meta, Name}, size=Size, type=Type_Num,
 
 %% Match specs for buffers.
 all_buffers(Table_Name) ->
-    try ets:match_object(Table_Name, #ets_buffer{name=meta_key('_'), size='_', type='_',
-                                                 reserve_loc='_', write_loc='_', read_loc='_'})
+    try ets:match_object(Table_Name, #ets_buffer{name=meta_key('_'), _='_'})
     catch error:badarg -> []
     end.
 one_buffer(Table_Name, Buffer_Name) ->
-    try ets:match_object(Table_Name, #ets_buffer{name=meta_key(Buffer_Name), size='_', type='_',
-                                                 reserve_loc='_', write_loc='_', read_loc='_'})
+    try ets:match_object(Table_Name, #ets_buffer{name=meta_key(Buffer_Name), _='_'})
     catch error:badarg -> []
     end.
 
@@ -447,7 +445,7 @@ get_buffer_type_and_pos(Table_Name, Buffer_Name, Update_Cmd) ->
 
 clear_internal(Table_Name, Buffer_Name) ->
     try 
-        ets:match_delete(Table_Name, #buffer_data{key=buffer_key(Buffer_Name, '_'), data='_'}),
+        ets:match_delete(Table_Name, #buffer_data{key=buffer_key(Buffer_Name, '_'), _='_'}),
         ets:update_element(Table_Name, meta_key(Buffer_Name), [?RESERVE_LOC, ?WRITE_LOC, ?READ_LOC])
     catch error:badarg -> {missing_ets_buffer, Buffer_Name}
     end.
@@ -515,7 +513,7 @@ read_lifo(Table_Name, Buffer_Name, Read_Loc) ->
 
 get_lifo_match_specs(Buffer_Name, Read_Loc) ->
     Key = buffer_key(Buffer_Name, '$1'),
-    Match = #buffer_data{key=Key, data='_'},
+    Match = #buffer_data{key=Key, _='_'},
     Guard = [{'=<', Read_Loc, '$1'}],
     [{Match, Guard, ['$_']}].    %% Get the full object so it can be deleted.
 
