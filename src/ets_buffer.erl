@@ -278,8 +278,7 @@ make_buffer_meta(Buffer_Name, Buffer_Type)
     #ets_buffer{name=meta_key(Buffer_Name), type=buffer_type_num(Buffer_Type), size=0}.
 
 make_buffer_meta(Buffer_Name, Buffer_Type, Buffer_Size)
-  when is_atom(Buffer_Name), is_integer(Buffer_Size), Buffer_Size > 0,
-       (Buffer_Type =:= ring orelse Buffer_Type =:= fifo orelse Buffer_Type =:= lifo) ->
+  when is_atom(Buffer_Name), is_integer(Buffer_Size), Buffer_Type =:= ring, Buffer_Size > 0 ->
     #ets_buffer{name=meta_key(Buffer_Name), type=buffer_type_num(Buffer_Type), size=Buffer_Size}.
 
 %% @doc Add to a single ETS table to hold another FIFO or LIFO buffer.
@@ -521,9 +520,9 @@ get_lifo_match_specs(Buffer_Name, Read_Loc) ->
 %%% Read logic has several possibilities:
 %%%   If Start/End are the same, return an empty set of data...
 %%%   If Retry attempts yield nothing, return an empty set without deleting any data...
-%%%   If an attempt yields any data, delete and return the results
+%%%   If an attempt yields any data, delete (except for ring) and return the results
 %%%
-%%% Retries are necessary because read slot(s) may be reserved, but not written,
+%%% Retries are necessary when read slot(s) is reserved, but not yet written,
 %%% because other processes jumped in with reservations and even writes before
 %%% the first reservation had a chance to publish its write. Presumably the
 %%% data will show up before we give up, but it is possible that the return
@@ -540,7 +539,7 @@ read_ets_retry( Table_Name, Buffer_Name,  Buffer_Type, Read_Loc,  End_Loc, Retri
     case ets:select(Table_Name, Buffer_Entry_Match) of
         []   -> erlang:yield(),
                 read_ets_retry(Table_Name, Buffer_Name, Buffer_Type, Read_Loc, End_Loc, Retries-1, Buffer_Entry_Match, Buffer_Deletes);
-        Data -> ets:select_delete(Table_Name, Buffer_Deletes),
+        Data -> Buffer_Type =/= ring andalso ets:select_delete(Table_Name, Buffer_Deletes),
                 Data
     end.
 
@@ -576,10 +575,11 @@ history_internal(Table_Name, Buffer_Name, Num_Items) ->
     case get_buffer_write(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
         [Type_Num, Max_Loc, Write_Pos] ->
+            True_Num_Items = case Max_Loc of 0 -> Num_Items; _ -> min(Num_Items, Max_Loc) end,
             case buffer_type(Type_Num) of
-                ring          -> history_ring(Table_Name, Buffer_Name, Num_Items, Write_Pos, Max_Loc);
+                ring          -> history_ring(Table_Name, Buffer_Name, True_Num_Items, Write_Pos, Max_Loc);
                 _Fifo_Or_Lifo -> Pattern = {buffer_data(Buffer_Name, '_', '$1'),[],[['$1']]},
-                                 history_internal_limited(Table_Name, Pattern, Num_Items)
+                                 history_internal_limited(Table_Name, Pattern, True_Num_Items)
             end
     end.
 
@@ -601,7 +601,8 @@ history_ring(Table_Name, Buffer_Name, Num_Items, Write_Pos, Max_Loc) ->
                       ++ history_ring_get(Table_Name, Buffer_Name, Write_Pos, 1)
     end.
 
-history_ring_get(Table_Name, Buffer_Name, Num_Items, Start_Pos) ->
+history_ring_get(_Table_Name, _Buffer_Name,         0, _Start_Pos) -> [];
+history_ring_get( Table_Name,  Buffer_Name, Num_Items,  Start_Pos) ->
     case ets:select(Table_Name, [{buffer_data(Buffer_Name, '$1', '$2'),
                                  [{'>=', '$1', Start_Pos}], ['$2']}], Num_Items) of
         '$end_of_table'          -> [];
