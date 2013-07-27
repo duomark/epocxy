@@ -141,13 +141,11 @@ make_buffer_proplist(#ets_buffer{name={meta, Name}, size=Size, type=Type_Num,
 
 %% Match specs for buffers.
 all_buffers(Table_Name) ->
-    try ets:match_object(Table_Name, #ets_buffer{name=meta_key('_'), size='_', type='_',
-                                                 reserve_loc='_', write_loc='_', read_loc='_'})
+    try ets:match_object(Table_Name, #ets_buffer{name=meta_key('_'), _='_'})
     catch error:badarg -> []
     end.
 one_buffer(Table_Name, Buffer_Name) ->
-    try ets:match_object(Table_Name, #ets_buffer{name=meta_key(Buffer_Name), size='_', type='_',
-                                                 reserve_loc='_', write_loc='_', read_loc='_'})
+    try ets:match_object(Table_Name, #ets_buffer{name=meta_key(Buffer_Name), _='_'})
     catch error:badarg -> []
     end.
 
@@ -187,7 +185,7 @@ ring_reserve_write_cmd(Max)                              -> [{#ets_buffer.reserv
 ring_publish_write_cmd(Max,  Reserve_Loc,  Reserve_Loc)  -> [{#ets_buffer.write_loc,   1, Max, 1}, {#ets_buffer.read_loc, 1, Max, 1}];
 ring_publish_write_cmd(Max, _Reserve_Loc, _Old_Read_Loc) ->  {#ets_buffer.write_loc,   1, Max, 1}.
 
-%% Increment read pointer [but return 'try_again' if the read pointer has moved already].
+%% Increment read pointer
 ring_reserve_read_cmd(Num_Items, Write_Loc, Max_Loc, Read_Loc) ->
     case Write_Loc >= Read_Loc of
         true  -> [{#ets_buffer.read_loc, 0}, {#ets_buffer.read_loc, Num_Items, Write_Loc-1, Write_Loc}];
@@ -280,8 +278,7 @@ make_buffer_meta(Buffer_Name, Buffer_Type)
     #ets_buffer{name=meta_key(Buffer_Name), type=buffer_type_num(Buffer_Type), size=0}.
 
 make_buffer_meta(Buffer_Name, Buffer_Type, Buffer_Size)
-  when is_atom(Buffer_Name), is_integer(Buffer_Size), Buffer_Size > 0,
-       (Buffer_Type =:= ring orelse Buffer_Type =:= fifo orelse Buffer_Type =:= lifo) ->
+  when is_atom(Buffer_Name), is_integer(Buffer_Size), Buffer_Type =:= ring, Buffer_Size > 0 ->
     #ets_buffer{name=meta_key(Buffer_Name), type=buffer_type_num(Buffer_Type), size=Buffer_Size}.
 
 %% @doc Add to a single ETS table to hold another FIFO or LIFO buffer.
@@ -388,7 +385,9 @@ clear_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 
 %% @doc Delete the entire dedicate ets table.
 delete_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
-    ets:delete(Buffer_Name).
+    try   ets:delete(Buffer_Name)
+    catch error:badarg -> {missing_ets_buffer, Buffer_Name}
+    end.
 
 %% @doc Write data to the named ets buffer table following the semantics of the buffer type.
 write_dedicated(Buffer_Name, Data) when is_atom(Buffer_Name) ->
@@ -445,7 +444,7 @@ get_buffer_type_and_pos(Table_Name, Buffer_Name, Update_Cmd) ->
 
 clear_internal(Table_Name, Buffer_Name) ->
     try 
-        ets:match_delete(Table_Name, #buffer_data{key=buffer_key(Buffer_Name, '_'), data='_'}),
+        ets:match_delete(Table_Name, #buffer_data{key=buffer_key(Buffer_Name, '_'), _='_'}),
         ets:update_element(Table_Name, meta_key(Buffer_Name), [?RESERVE_LOC, ?WRITE_LOC, ?READ_LOC])
     catch error:badarg -> {missing_ets_buffer, Buffer_Name}
     end.
@@ -513,7 +512,7 @@ read_lifo(Table_Name, Buffer_Name, Read_Loc) ->
 
 get_lifo_match_specs(Buffer_Name, Read_Loc) ->
     Key = buffer_key(Buffer_Name, '$1'),
-    Match = #buffer_data{key=Key, data='_'},
+    Match = #buffer_data{key=Key, _='_'},
     Guard = [{'=<', Read_Loc, '$1'}],
     [{Match, Guard, ['$_']}].    %% Get the full object so it can be deleted.
 
@@ -521,9 +520,9 @@ get_lifo_match_specs(Buffer_Name, Read_Loc) ->
 %%% Read logic has several possibilities:
 %%%   If Start/End are the same, return an empty set of data...
 %%%   If Retry attempts yield nothing, return an empty set without deleting any data...
-%%%   If an attempt yields any data, delete and return the results
+%%%   If an attempt yields any data, delete (except for ring) and return the results
 %%%
-%%% Retries are necessary because read slot(s) may be reserved, but not written,
+%%% Retries are necessary when read slot(s) is reserved, but not yet written,
 %%% because other processes jumped in with reservations and even writes before
 %%% the first reservation had a chance to publish its write. Presumably the
 %%% data will show up before we give up, but it is possible that the return
@@ -540,7 +539,7 @@ read_ets_retry( Table_Name, Buffer_Name,  Buffer_Type, Read_Loc,  End_Loc, Retri
     case ets:select(Table_Name, Buffer_Entry_Match) of
         []   -> erlang:yield(),
                 read_ets_retry(Table_Name, Buffer_Name, Buffer_Type, Read_Loc, End_Loc, Retries-1, Buffer_Entry_Match, Buffer_Deletes);
-        Data -> ets:select_delete(Table_Name, Buffer_Deletes),
+        Data -> Buffer_Type =/= ring andalso ets:select_delete(Table_Name, Buffer_Deletes),
                 Data
     end.
 
@@ -576,10 +575,11 @@ history_internal(Table_Name, Buffer_Name, Num_Items) ->
     case get_buffer_write(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
         [Type_Num, Max_Loc, Write_Pos] ->
+            True_Num_Items = case Max_Loc of 0 -> Num_Items; _ -> min(Num_Items, Max_Loc) end,
             case buffer_type(Type_Num) of
-                ring          -> history_ring(Table_Name, Buffer_Name, Num_Items, Write_Pos, Max_Loc);
+                ring          -> history_ring(Table_Name, Buffer_Name, True_Num_Items, Write_Pos, Max_Loc);
                 _Fifo_Or_Lifo -> Pattern = {buffer_data(Buffer_Name, '_', '$1'),[],[['$1']]},
-                                 history_internal_limited(Table_Name, Pattern, Num_Items)
+                                 history_internal_limited(Table_Name, Pattern, True_Num_Items)
             end
     end.
 
@@ -601,7 +601,8 @@ history_ring(Table_Name, Buffer_Name, Num_Items, Write_Pos, Max_Loc) ->
                       ++ history_ring_get(Table_Name, Buffer_Name, Write_Pos, 1)
     end.
 
-history_ring_get(Table_Name, Buffer_Name, Num_Items, Start_Pos) ->
+history_ring_get(_Table_Name, _Buffer_Name,         0, _Start_Pos) -> [];
+history_ring_get( Table_Name,  Buffer_Name, Num_Items,  Start_Pos) ->
     case ets:select(Table_Name, [{buffer_data(Buffer_Name, '$1', '$2'),
                                  [{'>=', '$1', Start_Pos}], ['$2']}], Num_Items) of
         '$end_of_table'          -> [];
