@@ -34,6 +34,8 @@ end_per_suite(Config)  -> Config.
 %% Test Modules is ?TM
 -define(TM, cxy_ctl).
 
+
+-spec check_no_timer_limits(proplists:proplist()) -> ok.
 check_no_timer_limits(_Config) ->
     Limits = [{a, 15, 0}, {b, 35, 0}],
     ok = ?TM:init(Limits),
@@ -43,6 +45,7 @@ check_no_timer_limits(_Config) ->
     true = lists:member({b, 35, 0, 0}, All_Entries),
     ok.
 
+-spec check_with_timer_limits(proplists:proplist()) -> ok.
 check_with_timer_limits(_Config) ->
     Limits = [{a, 15, 5}, {b, 35, 0}, {c, 17, 4}],
     ok = ?TM:init(Limits),
@@ -53,6 +56,7 @@ check_with_timer_limits(_Config) ->
     true = lists:member({c, 17, 0, 4}, All_Entries),
     ok.
 
+-spec check_atom_limits(proplists:proplist()) -> ok.
 check_atom_limits(_Config) ->
     Limits = [{a, unlimited, 0},   {b, unlimited, 5},
               {c, inline_only, 0}, {d, inline_only, 7}],
@@ -65,6 +69,7 @@ check_atom_limits(_Config) ->
     true = lists:member({d,  0, 0, 7}, All_Entries),
     ok.
 
+-spec check_limit_errors(proplists:proplist()) -> ok.
 check_limit_errors(_Config) ->
     Limits1 = [{a, unlimited, -1}, {b, 5, 0}, {c, unlimited, 0}],
     {error, {invalid_init_args, [{a, unlimited, -1}]}} = ?TM:init(Limits1),
@@ -72,6 +77,7 @@ check_limit_errors(_Config) ->
     {error, {invalid_init_args, Limits2}} = ?TM:init(Limits2),
     ok.
 
+-spec check_concurrency_types(proplists:proplist()) -> ok.
 check_concurrency_types(_Config) ->
     Limits = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
     ok = ?TM:init(Limits),
@@ -83,6 +89,7 @@ check_concurrency_types(_Config) ->
     ok.
 
 %% execute_task runs a background task without feedback.
+-spec check_execute_task(proplists:proplist()) -> ok.
 check_execute_task(_Config) ->
     Limits = [{ets_inline, 0, 0}, {ets_spawn, 3, 5}],
     ok = ?TM:init(Limits),
@@ -110,6 +117,7 @@ check_execute_task(_Config) ->
     ok.
 
 %% execute_pid runs a task with a return value of the Pid or {inline, Result}.
+-spec check_execute_pid(proplists:proplist()) -> ok.
 check_execute_pid(_Config) ->
     Limits = [{pdict_inline, 0, 0}, {pdict_spawn, 3, 5}],
     ok = ?TM:init(Limits),
@@ -140,6 +148,7 @@ check_execute_pid(_Config) ->
 
     ok.
 
+-spec put_pdict(any(), any()) -> {get_pdict, pid(), get(any())}.
 put_pdict(Key, Value) ->
     put(Key, Value),
     receive {From, get_pdict, Key} -> From ! {get_pdict, self(), get(Key)} end.
