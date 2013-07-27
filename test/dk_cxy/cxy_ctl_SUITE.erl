@@ -147,7 +147,7 @@ check_execute_pid(_Config) ->
 
     ok.
 
--spec put_pdict(any(), any()) -> {get_pdict, pid(), any()}.
+-spec put_pdict(atom(), any()) -> {get_pdict, pid(), any()}.
 put_pdict(Key, Value) ->
     put(Key, Value),
     receive {From, get_pdict, Key} -> From ! {get_pdict, self(), get(Key)} end.
