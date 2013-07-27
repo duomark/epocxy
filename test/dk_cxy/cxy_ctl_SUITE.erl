@@ -34,7 +34,6 @@ end_per_suite(Config)  -> Config.
 %% Test Modules is ?TM
 -define(TM, cxy_ctl).
 
-
 -spec check_no_timer_limits(proplists:proplist()) -> ok.
 check_no_timer_limits(_Config) ->
     Limits = [{a, 15, 0}, {b, 35, 0}],
@@ -148,7 +147,7 @@ check_execute_pid(_Config) ->
 
     ok.
 
--spec put_pdict(any(), any()) -> {get_pdict, pid(), get(any())}.
+-spec put_pdict(any(), any()) -> {get_pdict, pid(), any()}.
 put_pdict(Key, Value) ->
     put(Key, Value),
     receive {From, get_pdict, Key} -> From ! {get_pdict, self(), get(Key)} end.
