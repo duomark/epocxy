@@ -40,6 +40,7 @@ end_per_suite(Config)  -> Config.
 -define(TM, ets_buffer).
 -define(ATTRS, [name, size, type, reserve_loc, write_loc, read_loc]).
 
+-spec check_shared_error(proplists:proplist()) -> ok.
 check_shared_error(_Config) ->
     Tab1 = foo,
     Tab2 = bar,
@@ -67,6 +68,7 @@ check_shared_error(_Config) ->
     false = ?TM:delete(Tab2),
     ok.
 
+-spec check_dedicated_error(proplists:proplist()) -> ok.
 check_dedicated_error(_Config) ->
     Tab1 = foo,
     Tab2 = bar,
@@ -93,6 +95,7 @@ check_dedicated_error(_Config) ->
     {missing_ets_buffer, Tab2} = ?TM:delete_dedicated(Tab2),
     ok.
     
+-spec check_shared_create(proplists:proplist()) -> ok.
 check_shared_create(_Config) ->
     Tab1 = ets_tests,
     Tab2 = batches,
@@ -118,6 +121,7 @@ check_shared_create(_Config) ->
     [?TM, 0] = [ets:info(?TM, Prop) || Prop <- [name, size]],
     ok.
 
+-spec check_dedicated_create(proplists:proplist()) -> ok.
 check_dedicated_create(_Config) ->
     Tab1 = ets_tests,
     Tab2 = batches,
@@ -141,6 +145,7 @@ check_dedicated_create(_Config) ->
     undefined = ets:info(Tab2, name),
     ok.
 
+-spec check_shared_history(proplists:proplist()) -> ok.
 check_shared_history(_Config) ->    
     Tab_Specs = [{Tab1, _Type1}, {Tab2, _Type2, _Size2}, {Tab3, _Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
@@ -181,6 +186,7 @@ check_shared_history(_Config) ->
     [true, true, true] = [?TM:delete(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     ok.
 
+-spec check_dedicated_history(proplists:proplist()) -> ok.
 check_dedicated_history(_Config) ->
     Tab_Specs = [{Tab1, _Type1}, {Tab2, _Type2, _Size2}, {Tab3, _Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
@@ -227,6 +233,7 @@ check_dedicated_history(_Config) ->
     [true, true, true] = [?TM:delete_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     ok.
 
+-spec check_shared_clear(proplists:proplist()) -> ok.
 check_shared_clear(_Config) ->
     Tab_Specs = [{Tab1, Type1}, {Tab2, Type2, Size2}, {Tab3, Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
@@ -257,6 +264,7 @@ check_shared_clear(_Config) ->
     [?TM, 0] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% no meta
     ok.
 
+-spec check_dedicated_clear(proplists:proplist()) -> ok.
 check_dedicated_clear(_Config) ->
     Tab_Specs = [{Tab1, Type1}, {Tab2, Type2, Size2}, {Tab3, Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
@@ -295,6 +303,7 @@ check_dedicated_clear(_Config) ->
     [undefined, undefined, undefined, undefined] = [ets:info(Tab, name) || Tab <- [?TM, Tab1, Tab2, Tab3]],
     ok.
 
+-spec check_shared_read(proplists:proplist()) -> ok.
 check_shared_read(_Config) ->    
     Tab_Specs = [{Tab1, _Type1}, {Tab2, _Type2, _Size2}, {Tab3, _Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
@@ -335,6 +344,7 @@ check_shared_read(_Config) ->
     [true, true, true] = [?TM:delete(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     ok.
 
+-spec check_dedicated_read(proplists:proplist()) -> ok.
 check_dedicated_read(_Config) ->
     Tab_Specs = [{Tab1, _Type1}, {Tab2, _Type2, _Size2}, {Tab3, _Type3}]
         = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
@@ -379,6 +389,7 @@ check_dedicated_read(_Config) ->
     [true, true, true] = [?TM:delete_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     ok.
 
+-spec check_shared_fifo_edges(proplists:proplist()) -> ok.
 check_shared_fifo_edges(_Config) ->    
     Tabs = [Tab1, Tab2] = [beets, apples],
     ?TM = ?TM:create([{T, fifo} || T <- Tabs]),
@@ -407,6 +418,7 @@ check_shared_fifo_edges(_Config) ->
     [true, true] = [?TM:delete(T) || T <- Tabs],
     ok.
 
+-spec check_dedicated_fifo_edges(proplists:proplist()) -> ok.
 check_dedicated_fifo_edges(_Config) ->    
     Tabs = [Tab1, Tab2] = [beets, apples],
     Tabs = [?TM:create_dedicated(T, fifo) || T <- Tabs],
@@ -436,6 +448,7 @@ check_dedicated_fifo_edges(_Config) ->
     ok.
 
 %% LIFO read is only supported 1 record at a time, but maybe in the future...
+-spec check_shared_lifo_edges(proplists:proplist()) -> ok.
 check_shared_lifo_edges(_Config) ->    
     Tabs = [Tab1, Tab2] = [beets, apples],
     ?TM = ?TM:create([{T, lifo} || T <- Tabs]),
@@ -463,6 +476,7 @@ check_shared_lifo_edges(_Config) ->
     [true, true] = [?TM:delete(T) || T <- Tabs],
     ok.
 
+-spec check_dedicated_lifo_edges(proplists:proplist()) -> ok.
 check_dedicated_lifo_edges(_Config) ->    
     Tabs = [Tab1, Tab2] = [beets, apples],
     Tabs = [?TM:create_dedicated(T, lifo) || T <- Tabs],
@@ -490,6 +504,7 @@ check_dedicated_lifo_edges(_Config) ->
     [true, true] = [?TM:delete_dedicated(T) || T <- Tabs],
     ok.
 
+-spec check_shared_ring_edges(proplists:proplist()) -> ok.
 check_shared_ring_edges(_Config) ->    
     Tabs = [Tab1, Tab2] = [beets, apples],
     ?TM = ?TM:create([{T, ring, 5} || T <- Tabs]),
@@ -550,6 +565,7 @@ check_shared_ring_edges(_Config) ->
     [true, true] = [?TM:delete(T) || T <- Tabs],
     ok.
 
+-spec check_dedicated_ring_edges(proplists:proplist()) -> ok.
 check_dedicated_ring_edges(_Config) ->    
     Tabs = [Tab1, Tab2] = [beets, apples],
     [Tab1, Tab2] = [?TM:create_dedicated(T, ring, 5) || T <- Tabs],
@@ -609,4 +625,3 @@ check_dedicated_ring_edges(_Config) ->
 
     [true, true] = [?TM:delete_dedicated(T) || T <- Tabs],
     ok.
-
