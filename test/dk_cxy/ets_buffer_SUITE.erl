@@ -11,7 +11,8 @@
          check_shared_read/1,       check_dedicated_read/1,
          check_shared_fifo_edges/1, check_dedicated_fifo_edges/1,
          check_shared_lifo_edges/1, check_dedicated_lifo_edges/1,
-         check_shared_ring_edges/1, check_dedicated_ring_edges/1
+         check_shared_ring_edges/1, check_dedicated_ring_edges/1,
+         check_shared_read_all/1,   check_dedicated_read_all/1
         ]).
 
 -include_lib("common_test/include/ct.hrl").
@@ -26,7 +27,8 @@ all() -> [
           check_shared_read,       check_dedicated_read,
           check_shared_fifo_edges, check_dedicated_fifo_edges,
           check_shared_lifo_edges, check_dedicated_lifo_edges,
-          check_shared_ring_edges, check_dedicated_ring_edges
+          check_shared_ring_edges, check_dedicated_ring_edges,
+          check_shared_read_all,   check_dedicated_read_all
          ].
 
 -type config() :: proplists:proplist().
@@ -55,15 +57,21 @@ check_shared_error(_Config) ->
     [15] = ?TM:history(Tab1),
     [15] = ?TM:history(Tab1, 5),
     [15] = ?TM:read(Tab1),
+    [  ] = ?TM:read_all(Tab1),
+       0 = ?TM:num_entries(Tab1),
+      20 = ?TM:capacity(Tab1),
 
     [] = ?TM:list(Tab2),
     {missing_ets_buffer, Tab2} = ?TM:write(Tab2, 16),
     {missing_ets_buffer, Tab2} = ?TM:history(Tab2),
     {missing_ets_buffer, Tab2} = ?TM:history(Tab2, 5),
     {missing_ets_buffer, Tab2} = ?TM:read(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:read_all(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:num_entries(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:capacity(Tab2),
 
-    true = ?TM:clear(Tab1),
-    true = ?TM:delete(Tab1),
+    true  = ?TM:clear(Tab1),
+    true  = ?TM:delete(Tab1),
     false = ?TM:clear(Tab2),
     false = ?TM:delete(Tab2),
     ok.
@@ -82,12 +90,18 @@ check_dedicated_error(_Config) ->
     [15] = ?TM:history_dedicated(Tab1),
     [15] = ?TM:history_dedicated(Tab1, 5),
     [15] = ?TM:read_dedicated(Tab1),
+    [  ] = ?TM:read_all_dedicated(Tab1),
+       0 = ?TM:num_entries_dedicated(Tab1),
+      20 = ?TM:capacity_dedicated(Tab1),
 
     [] = ?TM:list_dedicated(Tab2),
     {missing_ets_buffer, Tab2} = ?TM:write_dedicated(Tab2, 16),
     {missing_ets_buffer, Tab2} = ?TM:history_dedicated(Tab2),
     {missing_ets_buffer, Tab2} = ?TM:history_dedicated(Tab2, 5),
     {missing_ets_buffer, Tab2} = ?TM:read_dedicated(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:read_all_dedicated(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:num_entries_dedicated(Tab2),
+    {missing_ets_buffer, Tab2} = ?TM:capacity_dedicated(Tab2),
 
     true = ?TM:clear_dedicated(Tab1),
     true = ?TM:delete_dedicated(Tab1),
@@ -624,4 +638,84 @@ check_dedicated_ring_edges(_Config) ->
     [] = ?TM:history_dedicated(Tab1),
 
     [true, true] = [?TM:delete_dedicated(T) || T <- Tabs],
+    ok.
+
+-spec check_shared_read_all(proplists:proplist()) -> ok.
+check_shared_read_all(_Config) ->    
+    Tab_Specs = [{Tab1, _Type1}, {Tab2, _Type2, _Size2}, {Tab3, _Type3}]
+        = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
+    ?TM = ?TM:create(Tab_Specs),
+    [unlimited, 10, unlimited] = [?TM:capacity(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+    [0, 0, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+
+    Data1 = [
+             {Tab1, {red,        2}},
+             {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
+             {Tab3, {purple,     5}}, {Tab3, {hybrid,   7}}
+           ],
+    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
+
+    [1, 3, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+    [{red,        2}] = ?TM:read_all(Tab1),
+    [{macintosh, 34}, {winesap, 18}, {granny, 8}] = ?TM:read_all(Tab2),
+    not_supported = ?TM:read_all(Tab3),
+    [0, 0, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+
+    Data2 = [
+             {Tab1, {golden,   1}}, {Tab1, {green,  3}}, {Tab1, {orange, 8}},
+             {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
+            ],
+    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
+
+    [3, 0, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+    [{golden, 1}, {green, 3}, {orange, 8}] = ?TM:read_all(Tab1),
+    [] = ?TM:read_all(Tab2),
+    [0, 0, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+
+    [true, true, true] = [?TM:delete(Tab) || Tab <- [Tab1, Tab2, Tab3]],
+    ok.
+
+-spec check_dedicated_read_all(proplists:proplist()) -> ok.
+check_dedicated_read_all(_Config) ->
+    Tab_Specs = [{Tab1, _Type1}, {Tab2, _Type2, _Size2}, {Tab3, _Type3}]
+        = [{beets, fifo}, {apples, ring, 10}, {carrots, lifo}],
+    [Tab1, Tab2, Tab3] = [Result || Spec <- Tab_Specs,
+                                    begin
+                                        Result = case Spec of
+                                                     {Tab, Type}       -> ?TM:create_dedicated(Tab, Type);
+                                                     {Tab, Type, Size} -> ?TM:create_dedicated(Tab, Type, Size)
+                                                 end,
+                                        true
+                                    end],
+    [unlimited, 10, unlimited] = [?TM:capacity_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+    [0, 0, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+
+    Data1 = [
+             {Tab1, {red,        2}}, {Tab1, {golden,   1}},
+             {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
+             {Tab3, {purple,     5}}, {Tab3, {hybrid,   7}}
+           ],
+    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
+
+    [2, 3, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+    [{red,        2}, {golden, 1}] = ?TM:read_all_dedicated(Tab1),
+    [{macintosh, 34}, {winesap, 18}, {granny, 8}] = ?TM:read_all_dedicated(Tab2),
+    not_supported = ?TM:read_all_dedicated(Tab3),
+
+    Data2 = [
+              {Tab1, {green,  3}}, {Tab1, {orange, 8}},
+              {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
+            ],
+    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
+
+    [2, 0, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+    [{green, 3}, {orange, 8}] = ?TM:read_all_dedicated(Tab1),
+    [] = ?TM:read_all_dedicated(Tab2),
+    [0, 0, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
+
+    [true, true, true] = [?TM:delete_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     ok.

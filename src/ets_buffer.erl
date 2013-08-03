@@ -63,7 +63,9 @@
                    buffer_type/1, buffer_type_num/1,
                    meta_key/1, buffer_key/2, buffer_data/3,
                    ring_reserve_write_cmd/1, ring_reserve_read_cmd/4,
+                   ring_reserve_read_all_cmd/1,
                    fifo_publish_write_cmd/0, fifo_reserve_read_cmd/2,
+                   fifo_reserve_read_all_cmd/2,
                    lifo_reserve_write_cmd/0, %% lifo_reserve_read_cmd/2, 
                    get_buffer_type/2, get_buffer_readw/2, get_buffer_write/2,
                    get_buffer_type_and_pos/3
@@ -74,16 +76,18 @@
          %% API for buffers in a shared 'ets_buffer' named ets table...
          create/1, create/2, create/3,
          write/2,
-         read/1, read/2,
+         read/1, read/2, read_all/1,
          history/1, history/2,
          clear/1, delete/1, list/0, list/1,
+         num_entries/1, capacity/1,
 
          %% API when each buffer is in a dedicated named ets table.
          create_dedicated/2, create_dedicated/3,
          write_dedicated/2,
-         read_dedicated/1, read_dedicated/2,
+         read_dedicated/1, read_dedicated/2, read_all_dedicated/1,
          history_dedicated/1, history_dedicated/2,
-         clear_dedicated/1, delete_dedicated/1, list_dedicated/1
+         clear_dedicated/1, delete_dedicated/1, list_dedicated/1,
+         num_entries_dedicated/1, capacity_dedicated/1
         ]).
 
 -type buffer_name() :: atom().
@@ -117,9 +121,10 @@ buffer_type_num(ring) -> 1;
 buffer_type_num(fifo) -> 2;
 buffer_type_num(lifo) -> 3.
 
--define(RING_NUM, buffer_type_num(ring)).
--define(FIFO_NUM, buffer_type_num(fifo)).
--define(LIFO_NUM, buffer_type_num(lifo)).
+%% Some macro constants equivalent to above function call.
+-define(RING_NUM, 1).   %% buffer_type_num(ring)).
+-define(FIFO_NUM, 2).   %% buffer_type_num(fifo)).
+-define(LIFO_NUM, 3).   %% buffer_type_num(lifo)).
 
 %% Record stored in ets table, or used for match spec.
 -record(ets_buffer, {
@@ -179,6 +184,9 @@ fifo_publish_write_cmd() ->  {#ets_buffer.write_loc,   1}.
 fifo_reserve_read_cmd(Num_Items, Write_Loc) ->
     [{#ets_buffer.read_loc, 0}, {#ets_buffer.read_loc, Num_Items, Write_Loc-1, Write_Loc}].
 
+fifo_reserve_read_all_cmd(Write_Loc, Read_Loc) ->
+    [{#ets_buffer.read_loc, 0}, {#ets_buffer.read_loc, Write_Loc - Read_Loc}].
+
 
 %% Ring bumps write location, but only moves read location if the write pointer wraps to it.
 ring_reserve_write_cmd(Max)                              -> [{#ets_buffer.reserve_loc, 1, Max, 1}, {#ets_buffer.read_loc, 0}].
@@ -192,6 +200,9 @@ ring_reserve_read_cmd(Num_Items, Write_Loc, Max_Loc, Read_Loc) ->
         false -> New_Read_Loc = min(Num_Items - (Max_Loc - Read_Loc), Max_Loc),
                  [{#ets_buffer.read_loc, 0}, {#ets_buffer.read_loc, 0, Write_Loc, New_Read_Loc}]
     end.
+
+ring_reserve_read_all_cmd(Write_Loc) ->
+    [{#ets_buffer.read_loc, 0}, {#ets_buffer.read_loc, Write_Loc}].
 
 %% LIFO bumps write location, but only moves read location if it is not already past the reserve/write for this publish.
 lifo_reserve_write_cmd()            ->  {#ets_buffer.reserve_loc, -1}.
@@ -241,8 +252,11 @@ buffer_data(Name, Loc, Data) ->
 -spec write(buffer_name(), buffer_data()) -> true | buffer_error().
 -spec read(buffer_name()) -> [buffer_data()] | buffer_error().
 -spec read(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
+-spec read_all(buffer_name()) -> [buffer_data()] | buffer_error().
 -spec history(buffer_name()) -> [buffer_data()] | buffer_error().
 -spec history(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
+-spec num_entries(buffer_name()) -> non_neg_integer() | buffer_error().
+-spec capacity(buffer_name()) -> pos_integer() | unlimited | buffer_error().
 
 
 %% @doc Get a set of proplists for all buffers in the shared ets table.
@@ -304,6 +318,11 @@ delete(Buffer_Name) when is_atom(Buffer_Name) ->
 write(Buffer_Name, Data) when is_atom(Buffer_Name) ->
     write_internal(?MODULE, Buffer_Name, Data).
 
+%% @doc Read all currently queued data items (ring and FIFO only).
+read_all(Buffer_Name)
+  when is_atom(Buffer_Name) ->
+    read_all_internal(?MODULE, Buffer_Name).
+
 %% @doc Read one data item from a buffer following the semantics of the buffer type.
 read(Buffer_Name) when is_atom(Buffer_Name) ->
     read(Buffer_Name, 1).
@@ -328,6 +347,14 @@ history(Buffer_Name, Num_Items)
   when is_atom(Buffer_Name), is_integer(Num_Items), Num_Items > 0 ->
     history_internal(?MODULE, Buffer_Name, Num_Items).
 
+%% @doc Return the number of unread entries present in a buffer
+num_entries(Buffer_Name) when is_atom(Buffer_Name) ->
+    num_entries_internal(?MODULE, Buffer_Name).
+
+%% @doc Return the potential capacity of the buffer
+capacity(Buffer_Name) when is_atom(Buffer_Name) ->
+    capacity_internal(?MODULE, Buffer_Name).
+
     
 %%%------------------------------------------------------------------------------
 %%% External API for separately named ets_buffers (one per ets table)
@@ -342,8 +369,11 @@ history(Buffer_Name, Num_Items)
 -spec write_dedicated(buffer_name(), any()) -> true.
 -spec read_dedicated(buffer_name()) -> [buffer_data()] | buffer_error().
 -spec read_dedicated(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
+-spec read_all_dedicated(buffer_name()) -> [buffer_data()] | buffer_error().
 -spec history_dedicated(buffer_name()) -> [buffer_data()].
 -spec history_dedicated(buffer_name(), pos_integer()) -> [buffer_data()].
+-spec num_entries_dedicated(buffer_name()) -> non_neg_integer() | buffer_error().
+-spec capacity_dedicated(buffer_name()) -> pos_integer() | unlimited | buffer_error().
 
 
 %% @doc Get a single proplist for the buffer in a named ets table.
@@ -393,6 +423,11 @@ delete_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 write_dedicated(Buffer_Name, Data) when is_atom(Buffer_Name) ->
     write_internal(Buffer_Name, Buffer_Name, Data).
 
+%% @doc Read all currently queued data items from a dedicated buffer (ring and FIFO only).
+read_all_dedicated(Buffer_Name)
+  when is_atom(Buffer_Name) ->
+    read_all_internal(Buffer_Name, Buffer_Name).
+
 %% @doc Read one data item from a dedicated buffer following the semantics of the buffer type.
 read_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
     read_dedicated(Buffer_Name, 1).
@@ -416,6 +451,14 @@ history_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 history_dedicated(Buffer_Name, Num_Items)
   when is_atom(Buffer_Name), is_integer(Num_Items), Num_Items > 0 ->
     history_internal(Buffer_Name, Buffer_Name, Num_Items).
+
+%% @doc Return the number of unread entries present in a buffer
+num_entries_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
+    num_entries_internal(Buffer_Name, Buffer_Name).
+
+%% @doc Return the potential capacity of the buffer
+capacity_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
+    capacity_internal(Buffer_Name, Buffer_Name).
 
 
 %%%------------------------------------------------------------------------------
@@ -475,22 +518,29 @@ write_internal(Table_Name, Buffer_Name, Data) ->
     end.
 
 %% Use read pointer to reserve entries, obtain and then delete them.
+read_all_internal(Table_Name, Buffer_Name) ->
+    case get_buffer_readw(Table_Name, Buffer_Name) of
+        false                                            -> {missing_ets_buffer, Buffer_Name};
+        [?LIFO_NUM, _Max_Loc, _Write_Loc, _Old_Read_Loc] -> not_supported;
+        [_Type_Num, _Max_Loc,  Write_Loc,  Write_Loc]    -> [];
+        [?FIFO_NUM, _Max_Loc,  Write_Loc, Old_Read_Loc]  ->
+            read_internal_finish(fifo_reserve_read_all_cmd(Write_Loc, Old_Read_Loc), Table_Name, Buffer_Name, fifo);
+        [?RING_NUM, _Max_Loc,  Write_Loc, _Old_Read_Loc] ->
+            read_internal_finish(ring_reserve_read_all_cmd(Write_Loc), Table_Name, Buffer_Name, ring)
+    end.
+
+read_internal_finish(New_Read_Loc_Cmd, Table_Name, Buffer_Name, Buffer_Type) ->
+            [Start_Read_Loc, End_Read_Loc] = ets:update_counter(Table_Name, meta_key(Buffer_Name), New_Read_Loc_Cmd),
+            read_ets(Table_Name, Buffer_Name, Buffer_Type, Start_Read_Loc, End_Read_Loc, ?READ_RETRIES).
+
+%% Use read pointer to reserve entries, obtain and then delete them.
 read_internal(Table_Name, Buffer_Name, Num_Items) ->
     case get_buffer_readw(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
         [Type_Num, Max_Loc, Write_Loc, Old_Read_Loc] ->
             case buffer_type(Type_Num) of
-
-                %% Bump read pointer atomically, then read the data from old location to new...
-                fifo -> New_Read_Loc_Cmd = fifo_reserve_read_cmd(Num_Items, Write_Loc),
-                        [Start_Read_Loc, End_Read_Loc] = ets:update_counter(Table_Name, meta_key(Buffer_Name), New_Read_Loc_Cmd),
-                        read_ets(Table_Name, Buffer_Name, fifo, Start_Read_Loc, End_Read_Loc, ?READ_RETRIES);
-
-                %% Bump read pointer with wraparound if any entries available...
-                ring -> New_Loc_Cmd = ring_reserve_read_cmd(Num_Items, Write_Loc, Max_Loc, Old_Read_Loc),
-                        [Start_Read_Loc, End_Read_Loc] = ets:update_counter(Table_Name, meta_key(Buffer_Name), New_Loc_Cmd),
-                        read_ets(Table_Name, Buffer_Name, ring, Start_Read_Loc, End_Read_Loc, ?READ_RETRIES);
-
+                fifo -> read_internal_finish(fifo_reserve_read_cmd(Num_Items, Write_Loc), Table_Name, Buffer_Name, fifo);
+                ring -> read_internal_finish(ring_reserve_read_cmd(Num_Items, Write_Loc, Max_Loc, Old_Read_Loc), Table_Name, Buffer_Name, ring);
                 lifo -> case Num_Items of
                             1 -> read_lifo(Table_Name, Buffer_Name, Old_Read_Loc);
                             _ -> not_supported
@@ -590,7 +640,6 @@ history_internal_limited(Table_Name, Pattern, Num_Items) ->
                        end].
 
 history_ring(_Table_Name, _Buffer_Name, _Num_Items, 0, _Max_Loc) -> [];
-history_ring(_Table_Name, _Buffer_Name, 0, _Write_Pos, _Max_Loc) -> [];
 history_ring(Table_Name, Buffer_Name, Num_Items, Write_Pos, _Max_Loc)
  when Num_Items < Write_Pos ->
     history_ring_get(Table_Name, Buffer_Name, Num_Items, Write_Pos - Num_Items + 1);
@@ -607,4 +656,41 @@ history_ring_get( Table_Name,  Buffer_Name, Num_Items,  Start_Pos) ->
                                  [{'>=', '$1', Start_Pos}], ['$2']}], Num_Items) of
         '$end_of_table'          -> [];
         {Matches, _Continuation} -> Matches
+    end.
+
+
+%% Compute the number of entries using read and write pointers
+%% This is not supported for LIFO buffers because they may have
+%% holes in the buffer and an accurate size cannot simply be
+%% computed. Scanning the table also fails because it is non-atomic
+%% and the result might not reflect the number of LIFO entries.
+num_entries_internal(Table_Name, Buffer_Name) ->
+    case get_buffer_readw(Table_Name, Buffer_Name) of
+        false -> {missing_ets_buffer, Buffer_Name};
+        [Type_Num, Max_Loc, Write_Loc, Raw_Read_Loc] ->
+            Read_Loc = case {Write_Loc =:= 0, Raw_Read_Loc} of
+                           {true,  _} -> 0;             %% Nothing ever written
+                           {false, 0} -> 0;             %% Written, but nothing ever read
+                           {false, _} -> Raw_Read_Loc   %% Both written and read before
+                       end,
+            case buffer_type(Type_Num) of
+                lifo -> not_supported;                  %% Note: R/W indexes are negative
+                fifo -> Write_Loc - Read_Loc;
+                ring -> case Write_Loc >= Read_Loc of
+                            true  -> Write_Loc - Read_Loc;
+                            false -> (Max_Loc - Read_Loc) + Write_Loc
+                        end
+            end
+    end.
+
+%% Ring buffers have capacity limits; all others do not
+capacity_internal(Table_Name, Buffer_Name) ->
+    case get_buffer_readw(Table_Name, Buffer_Name) of
+        false -> {missing_ets_buffer, Buffer_Name};
+        [Type_Num, Max_Loc, _Write_Loc, _Read_Loc] ->
+            case buffer_type(Type_Num) of
+                fifo -> unlimited;
+                lifo -> unlimited;
+                ring -> Max_Loc
+            end
     end.

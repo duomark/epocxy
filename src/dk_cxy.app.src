@@ -5,7 +5,7 @@
 {application, dk_cxy,
  [
   {id, "dk_cxy"},
-  {vsn, "0.9.2"},
+  {vsn, "0.9.3"},
   {description, "DuoMark concurrency tools"},
   {modules,      [ets_buffer, cxy_ctl]},
   {registered,   []},
