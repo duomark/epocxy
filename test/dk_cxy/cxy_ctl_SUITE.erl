@@ -116,7 +116,7 @@ check_execute_task(_Config) ->
 
     ok.
 
-%% execute_pid runs a task with a return value of the Pid or {inline, Result}.
+%% execute_pid runs a task with a return value of {Pid, Monitor_Ref} or {inline, Result}.
 -spec check_execute_pid(proplists:proplist()) -> ok.
 check_execute_pid(_Config) ->
     Limits = [{pdict_inline, 0, 0}, {pdict_spawn, 3, 5}],
@@ -136,8 +136,8 @@ check_execute_pid(_Config) ->
     Old_Joe = erase(joe),
     try
         undefined = get(joe),
-        New_Pid = ?TM:execute_pid(pdict_spawn, ?MODULE, put_pdict, [joe, 5]),
-        false = New_Pid =:= self(),
+        {New_Pid, _Monitor_Ref} = ?TM:execute_pid(pdict_spawn, ?MODULE, put_pdict, [joe, 5]),
+        false = (New_Pid =:= self()),
         New_Pid ! {self(), get_pdict, joe},
         undefined = get(joe),
         ok = receive {get_pdict, New_Pid, 5} -> ok
