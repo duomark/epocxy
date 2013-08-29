@@ -132,7 +132,7 @@ do_init(Buffer_Params, Cxy_Params) ->
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
 %%   does not have too many currently executing processes. If there are too
-%%   many, execute the task inline. Does not return a pid nor results.
+%%   many, execute the task inline. Returns neither a pid nor a result.
 %% @end
 
 -spec execute_task(atom(), atom(), atom(), list()) -> ok.
@@ -157,10 +157,11 @@ execute_task(Task_Type, Mod, Fun, Args) ->
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
 %%   does not have too many currently executing processes. If there are too
-%%   many, execute the task inline. Returns a pid or results if inlined.
+%%   many, execute the task inline. Returns a pid if spawned, or results
+%%   if inlined.
 %% @end
 
--spec execute_pid(atom(), atom(), atom(), list()) -> pid() | {inline, any()}.
+-spec execute_pid(atom(), atom(), atom(), list()) -> {pid(), reference()} | {inline, any()}.
 
 execute_pid(Task_Type, Mod, Fun, Args) ->
     [Max, Max_History] = ets:update_counter(?MODULE, Task_Type, [{?MAX_PROCS_POS, 0}, {?MAX_HISTORY_POS, 0}]),
@@ -170,7 +171,7 @@ execute_pid(Task_Type, Mod, Fun, Args) ->
         %% Spawn a new process...
         {Unlimited, Below_Max} when Unlimited =:= -1; Below_Max =< Max ->
             Wrapper_Args = [Mod, Fun, Args, Task_Type, Max_History, Start, spawn],
-            proc_lib:spawn(?MODULE, execute_wrapper, Wrapper_Args);
+            spawn_monitor(?MODULE, execute_wrapper, Wrapper_Args);
 
         %% Execute inline.
         _Over_Max ->
@@ -180,27 +181,40 @@ execute_pid(Task_Type, Mod, Fun, Args) ->
 
 
 -spec execute_wrapper(atom(), atom(), list(), atom(), integer(), false | erlang:timestamp(), spawn | inline)
-                     -> true | {error, {ets_table_failure, tuple()} | {mfa_failure, tuple()}}.
+                     -> true | no_return().
 
 %% If Start is 'false', we don't want to record elapsed time history...
-execute_wrapper(Mod, Fun, Args, Task_Type, _Max_History, false, _Spawn_Or_Inline) ->
-    try apply(Mod, Fun, Args)
-    catch Error:Type -> {error, {mfa_failure, {{Error, Type}, {Mod, Fun, Args}, Task_Type, _Spawn_Or_Inline}}}
-    after decr_active_procs(Task_Type)
+execute_wrapper(Mod, Fun, Args, Task_Type, _Max_History, false, Spawn_Or_Inline) ->
+    Result = try apply(Mod, Fun, Args)
+             catch Error:Type -> {error, {mfa_failure, {{Error, Type}, {Mod, Fun, Args}, Task_Type, Spawn_Or_Inline}}}
+             after decr_active_procs(Task_Type)
+             end,
+    case Result of
+        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data);
+        Result             -> Result
     end;
+
 %% Otherwise, we incur the overhead cost of recording elapsed time history.
 execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, Spawn_Or_Inline) ->
     Spawn = os:timestamp(),
-    try apply(Mod, Fun, Args)
-    catch error:badarg -> {error, {ets_table_failure, {{Mod, Fun, Args}, Task_Type, Max_History, Start, Spawn_Or_Inline}}};
-          Error:Type   -> {error, {mfa_failure, {{Error, Type}, {Mod, Fun, Args}, Max_History, Task_Type, Spawn_Or_Inline}}}
-    after
-        decr_active_procs(Task_Type),
-        case Spawn_Or_Inline of
-            spawn  -> update_spawn_times (Task_Type, {Mod, Fun, Args}, Start, Spawn, os:timestamp());
-            inline -> update_inline_times(Task_Type, {Mod, Fun, Args}, Start, Spawn, os:timestamp())
-        end
+    Result = try apply(Mod, Fun, Args)
+             catch error:badarg -> {error, {ets_table_failure, {{Mod, Fun, Args}, Task_Type, Max_History, Start, Spawn_Or_Inline}}};
+                   Error:Type   -> {error, {mfa_failure, {{Error, Type}, {Mod, Fun, Args}, Max_History, Task_Type, Spawn_Or_Inline}}}
+             after
+                 decr_active_procs(Task_Type),
+                 case Spawn_Or_Inline of
+                     spawn  -> update_spawn_times (Task_Type, {Mod, Fun, Args}, Start, Spawn, os:timestamp());
+                     inline -> update_inline_times(Task_Type, {Mod, Fun, Args}, Start, Spawn, os:timestamp())
+                 end
+             end,
+    case Result of
+        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data);
+        Result             -> Result
     end.
+
+-spec fail_wrapper(spawn | inline, any()) -> no_return().
+fail_wrapper(spawn,  Call_Data) -> erlang:error(spawn_failure,  [Call_Data]);
+fail_wrapper(inline, Call_Data) -> exit({inline_failure, [Call_Data]}).
 
 
 %% @doc
