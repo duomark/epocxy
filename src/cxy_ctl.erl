@@ -16,7 +16,9 @@
 %% External interface
 -export([
          init/1,
-         execute_task/4, execute_pid/4,
+         execute_task/4, maybe_execute_task/4,
+         execute_pid_link/4, execute_pid_monitor/4, 
+         maybe_execute_pid_link/4, maybe_execute_pid_monitor/4, 
          concurrency_types/0, history/1, history/3
         ]).
 
@@ -138,6 +140,20 @@ do_init(Buffer_Params, Cxy_Params) ->
 -spec execute_task(atom(), atom(), atom(), list()) -> ok.
 
 execute_task(Task_Type, Mod, Fun, Args) ->
+    internal_execute_task(Task_Type, Mod, Fun, Args, inline).
+
+%% @doc
+%%   Execute a task by spawning a function to run it, only if the task type
+%%   does not have too many currently executing processes. If there are too
+%%   many, return {max_pids, Max} without executing, rather than ok.
+%% @end
+
+-spec maybe_execute_task(atom(), atom(), atom(), list()) -> ok | {max_pids, non_neg_integer()}.
+
+maybe_execute_task(Task_Type, Mod, Fun, Args) ->
+    internal_execute_task(Task_Type, Mod, Fun, Args, refuse).
+
+internal_execute_task(Task_Type, Mod, Fun, Args, Over_Limit_Action) ->
     [Max, Max_History] = ets:update_counter(?MODULE, Task_Type, [{?MAX_PROCS_POS, 0}, {?MAX_HISTORY_POS, 0}]),
     Start = Max_History > 0 andalso os:timestamp(),
     case {Max, incr_active_procs(Task_Type)} of
@@ -150,20 +166,61 @@ execute_task(Task_Type, Mod, Fun, Args) ->
 
         %% Execute inline.
         _Over_Max ->
-            _ = execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline),
-            ok
+            case Over_Limit_Action of
+                refuse -> {max_pids, Max};
+                inline -> _ = execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline),
+                          ok
+            end
     end.
 
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
 %%   does not have too many currently executing processes. If there are too
-%%   many, execute the task inline. Returns a pid if spawned, or results
+%%   many, execute the task inline. Returns a linked pid if spawned, or results
 %%   if inlined.
 %% @end
 
--spec execute_pid(atom(), atom(), atom(), list()) -> {pid(), reference()} | {inline, any()}.
+-spec execute_pid_link(atom(), atom(), atom(), list()) -> pid() | {inline, any()}.
 
-execute_pid(Task_Type, Mod, Fun, Args) ->
+execute_pid_link(Task_Type, Mod, Fun, Args) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, link, inline).
+
+%% @doc
+%%   Execute a task by spawning a function to run it, only if the task type
+%%   does not have too many currently executing processes. If there are too
+%%   many, return {max_pids, Max_Count} instead of linked pid.
+%% @end
+
+-spec maybe_execute_pid_link(atom(), atom(), atom(), list()) -> pid() | {max_pids, non_neg_integer()}.
+
+maybe_execute_pid_link(Task_Type, Mod, Fun, Args) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, link, refuse).
+
+%% @doc
+%%   Execute a task by spawning a function to run it, only if the task type
+%%   does not have too many currently executing processes. If there are too
+%%   many, execute the task inline. Returns a {pid(), reference()} if spawned
+%%   so the process can be monitored, or results if inlined.
+%% @end
+
+-spec execute_pid_monitor(atom(), atom(), atom(), list()) -> {pid(), reference()} | {inline, any()}.
+
+execute_pid_monitor(Task_Type, Mod, Fun, Args) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, monitor, inline).
+
+%% @doc
+%%   Execute a task by spawning a function to run it, only if the task type
+%%   does not have too many currently executing processes. If there are too
+%%   many, return {max_pids, Max_Count} instead of {pid(), reference()}.
+%% @end
+
+-spec maybe_execute_pid_monitor(atom(), atom(), atom(), list()) -> {pid(), reference()} | {max_pids, non_neg_integer()}.
+
+maybe_execute_pid_monitor(Task_Type, Mod, Fun, Args) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, monitor, refuse).
+
+
+internal_execute_pid(Task_Type, Mod, Fun, Args, Spawn_Type, Over_Limit_Action) ->
     [Max, Max_History] = ets:update_counter(?MODULE, Task_Type, [{?MAX_PROCS_POS, 0}, {?MAX_HISTORY_POS, 0}]),
     Start = Max_History > 0 andalso os:timestamp(),
     case {Max, incr_active_procs(Task_Type)} of
@@ -171,12 +228,17 @@ execute_pid(Task_Type, Mod, Fun, Args) ->
         %% Spawn a new process...
         {Unlimited, Below_Max} when Unlimited =:= -1; Below_Max =< Max ->
             Wrapper_Args = [Mod, Fun, Args, Task_Type, Max_History, Start, spawn],
-            spawn_monitor(?MODULE, execute_wrapper, Wrapper_Args);
+            case Spawn_Type of
+                link    -> spawn_link   (?MODULE, execute_wrapper, Wrapper_Args);
+                monitor -> spawn_monitor(?MODULE, execute_wrapper, Wrapper_Args)
+            end;
 
-        %% Execute inline.
+        %% Too many processes already running...
         _Over_Max ->
-            Result = execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline),
-            {inline, Result}
+            case Over_Limit_Action of
+                refuse -> {max_pids, Max};
+                inline -> {inline, execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline)}
+            end
     end.
 
 
@@ -249,7 +311,7 @@ history(Task_Type) ->
     {Spawn_Type, Inline_Type} = make_buffer_names(Task_Type),
     case get_buffer_times(Spawn_Type) of
         Spawn_Times_List when is_list(Spawn_Times_List) ->
-            {{spawn_execs, Spawn_Times_List },
+            {{spawn_execs,  Spawn_Times_List},
              {inline_execs, get_buffer_times(Inline_Type)}};
         Error -> Error
     end.
