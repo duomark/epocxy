@@ -4,10 +4,12 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([
-         check_no_timer_limits/1, check_with_timer_limits/1,
-         check_atom_limits/1, check_limit_errors/1,
+         check_no_timer_limits/1,     check_with_timer_limits/1,
+         check_atom_limits/1,         check_limit_errors/1,
          check_concurrency_types/1,
-         check_execute_task/1, check_execute_pid/1
+         check_execute_task/1,        check_maybe_execute_task/1,
+         check_execute_pid_link/1,    check_maybe_execute_pid_link/1,
+         check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1
         ]).
 
 %% Spawned functions
@@ -18,10 +20,12 @@
 -spec all() -> [atom()].
 
 all() -> [
-          check_no_timer_limits, check_with_timer_limits,
-          check_atom_limits, check_limit_errors,
+          check_no_timer_limits,     check_with_timer_limits,
+          check_atom_limits,         check_limit_errors,
           check_concurrency_types,
-          check_execute_task, check_execute_pid
+          check_execute_task,        check_maybe_execute_task,
+          check_execute_pid_link,    check_maybe_execute_pid_link,
+          check_execute_pid_monitor, check_maybe_execute_pid_monitor
          ].
 
 -type config() :: proplists:proplist().
@@ -91,54 +95,201 @@ check_concurrency_types(_Config) ->
 %% execute_task runs a background task without feedback.
 -spec check_execute_task(proplists:proplist()) -> ok.
 check_execute_task(_Config) ->
-    Limits = [{ets_inline, 0, 0}, {ets_spawn, 3, 5}],
+    {Inline_Type, Spawn_Type} = {ets_inline, ets_spawn},
+    Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
     ok = ?TM:init(Limits),
-    check_execute_task = ets:new(check_execute_task, [public, named_table]),
+    Ets_Table = ets:new(check_execute_task, [public, named_table]),
 
     try
         %% Inline update the shared ets table...
-        ok = ?TM:execute_task(ets_inline, ets, insert_new, [check_execute_task, {joe, 5}]),
-        [{joe, 5}] = ets:lookup(check_execute_task, joe),
-        ok = ?TM:execute_task(ets_inline, ets, insert, [check_execute_task, {joe, 7}]),
-        [{joe, 7}] = ets:lookup(check_execute_task, joe),
-        true = ets:delete(check_execute_task, joe),
+        ok = ?TM:execute_task(Inline_Type, ets, insert_new, [Ets_Table, {joe, 5}]),
+        [{joe, 5}] = ets:lookup(Ets_Table, joe),
+        ok = ?TM:execute_task(Inline_Type, ets, insert, [Ets_Table, {joe, 7}]),
+        [{joe, 7}] = ets:lookup(Ets_Table, joe),
+        true = ets:delete(Ets_Table, joe),
 
         %% Spawn update the shared ets table.
-        ok = ?TM:execute_task(ets_spawn, ets, insert_new, [check_execute_task, {joe, 4}]),
+        ok = ?TM:execute_task(Spawn_Type, ets, insert_new, [Ets_Table, {joe, 4}]),
         erlang:yield(),
-        [{joe, 4}] = ets:lookup(check_execute_task, joe),
-        ok = ?TM:execute_task(ets_spawn, ets, insert, [check_execute_task, {joe, 6}]),
+        [{joe, 4}] = ets:lookup(Ets_Table, joe),
+        ok = ?TM:execute_task(Spawn_Type, ets, insert, [Ets_Table, {joe, 6}]),
         erlang:yield(),
-        [{joe, 6}] = ets:lookup(check_execute_task, joe),
-        true = ets:delete(check_execute_task, joe)
-    after true = ets:delete(check_execute_task)
+        [{joe, 6}] = ets:lookup(Ets_Table, joe),
+        true = ets:delete(Ets_Table, joe)
+    after true = ets:delete(Ets_Table)
     end,
 
     ok.
 
-%% execute_pid runs a task with a return value of {Pid, Monitor_Ref} or {inline, Result}.
--spec check_execute_pid(proplists:proplist()) -> ok.
-check_execute_pid(_Config) ->
-    Limits = [{pdict_inline, 0, 0}, {pdict_spawn, 3, 5}],
+%% maybe_execute_task runs a background task without feedback but not more than limit.
+-spec check_maybe_execute_task(proplists:proplist()) -> ok.
+check_maybe_execute_task(_Config) ->
+    {Overmax_Type, Spawn_Type} = {ets_overmax, ets_spawn},
+    Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
+    ok = ?TM:init(Limits),
+    Ets_Table = ets:new(check_maybe_execute_task, [public, named_table]),
+
+    try
+        %% Over max should refuse to run...
+        {max_pids, 0} = ?TM:maybe_execute_task(Overmax_Type, ets, insert_new, [Ets_Table, {joe, 5}]),
+        erlang:yield(),
+        [] = ets:lookup(Ets_Table, joe),
+        {max_pids, 0} = ?TM:maybe_execute_task(Overmax_Type, ets, insert_new, [Ets_Table, {joe, 7}]),
+        erlang:yield(),
+        [] = ets:lookup(Ets_Table, joe),
+        true = ets:delete(Ets_Table, joe),
+
+        %% Spawn update the shared ets table.
+        ok = ?TM:maybe_execute_task(Spawn_Type, ets, insert_new, [Ets_Table, {joe, 4}]),
+        erlang:yield(),
+        [{joe, 4}] = ets:lookup(Ets_Table, joe),
+        ok = ?TM:maybe_execute_task(Spawn_Type, ets, insert, [Ets_Table, {joe, 6}]),
+        erlang:yield(),
+        [{joe, 6}] = ets:lookup(Ets_Table, joe),
+        true = ets:delete(Ets_Table, joe)
+    after true = ets:delete(Ets_Table)
+    end,
+
+    ok.
+
+%% execute_pid_link runs a task with a return value of Pid or {inline, Result}.
+-spec check_execute_pid_link(proplists:proplist()) -> ok.
+check_execute_pid_link(_Config) ->
+    {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
+    Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
     ok = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
     try
-        {inline, undefined} = ?TM:execute_pid(pdict_inline, erlang, put, [joe, 5]),
+        {inline, undefined} = ?TM:execute_pid_link(Inline_Type, erlang, put, [joe, 5]),
         5 = get(joe),
-        {inline, 5} = ?TM:execute_pid(pdict_inline, erlang, put, [joe, 7]),
+        {inline, 5} = ?TM:execute_pid_link(Inline_Type, erlang, put, [joe, 7]),
         7 = get(joe)
     after put(joe, Old_Joe)
     end,
 
     %% When spawned, it affects a new process dictionary, not ours.
+    Self = self(),
     Old_Joe = erase(joe),
     try
         undefined = get(joe),
-        {New_Pid, _Monitor_Ref} = ?TM:execute_pid(pdict_spawn, ?MODULE, put_pdict, [joe, 5]),
+        New_Pid = ?TM:execute_pid_link(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
+        false = (New_Pid =:= Self),
+        {links, [Self]} = process_info(New_Pid, links),
+        {monitors,  []} = process_info(New_Pid, monitors),
         false = (New_Pid =:= self()),
-        New_Pid ! {self(), get_pdict, joe},
+        New_Pid ! {Self, get_pdict, joe},
+        undefined = get(joe),
+        ok = receive {get_pdict, New_Pid, 5} -> ok
+             after 100 -> timeout
+             end
+    after put(joe, Old_Joe)
+    end,
+
+    ok.
+
+%% maybe_execute_pid_link runs a task with a return value of Pid or {max_pids, Max}.
+-spec check_maybe_execute_pid_link(proplists:proplist()) -> ok.
+check_maybe_execute_pid_link(_Config) ->
+    {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
+    Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
+    ok = ?TM:init(Limits),
+    
+    %% When inline, update our process dictionary...
+    Old_Joe = erase(joe),
+    try
+        {max_pids, 0} = ?TM:maybe_execute_pid_link(Overmax_Type, erlang, put, [joe, 5]),
+        erlang:yield(),
+        undefined = get(joe),
+        {max_pids, 0} = ?TM:maybe_execute_pid_link(Overmax_Type, erlang, put, [joe, 7]),
+        erlang:yield(),
+        undefined = get(joe)
+    after put(joe, Old_Joe)
+    end,
+
+    %% When spawned, it affects a new process dictionary, not ours.
+    Self = self(),
+    Old_Joe = erase(joe),
+    try
+        undefined = get(joe),
+        New_Pid = ?TM:maybe_execute_pid_link(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
+        false = (New_Pid =:= Self),
+        {links, [Self]} = process_info(New_Pid, links),
+        {monitors,  []} = process_info(New_Pid, monitors),
+        New_Pid ! {Self, get_pdict, joe},
+        undefined = get(joe),
+        ok = receive {get_pdict, New_Pid, 5} -> ok
+             after 100 -> timeout
+             end
+    after put(joe, Old_Joe)
+    end,
+
+    ok.
+
+%% execute_pid_monitor runs a task with a return value of {Pid, Monitor_Ref} or {inline, Result}.
+-spec check_execute_pid_monitor(proplists:proplist()) -> ok.
+check_execute_pid_monitor(_Config) ->
+    {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
+    Limits = [{Inline_Type, 0, 0}, {Spawn_Type, 3, 5}],
+    ok = ?TM:init(Limits),
+    
+    %% When inline, update our process dictionary...
+    Old_Joe = erase(joe),
+    try
+        {inline, undefined} = ?TM:execute_pid_monitor(Inline_Type, erlang, put, [joe, 5]),
+        5 = get(joe),
+        {inline, 5} = ?TM:execute_pid_monitor(Inline_Type, erlang, put, [joe, 7]),
+        7 = get(joe)
+    after put(joe, Old_Joe)
+    end,
+
+    %% When spawned, it affects a new process dictionary, not ours.
+    Self = self(),
+    Old_Joe = erase(joe),
+    try
+        undefined = get(joe),
+        {New_Pid, _Monitor_Ref} = ?TM:execute_pid_monitor(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
+        false = (New_Pid =:= self()),
+        {links,        []} = process_info(New_Pid, links),
+        New_Pid ! {Self, get_pdict, joe},
+        undefined = get(joe),
+        ok = receive {get_pdict, New_Pid, 5} -> ok
+             after 100 -> timeout
+             end
+    after put(joe, Old_Joe)
+    end,
+
+    ok.
+
+%% maybe_execute_pid_monitor runs a task with a return value of {Pid, Monitor_Ref} or {max_pids, Max}.
+-spec check_maybe_execute_pid_monitor(proplists:proplist()) -> ok.
+check_maybe_execute_pid_monitor(_Config) ->
+    {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
+    Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
+    ok = ?TM:init(Limits),
+    
+    %% When inline, update our process dictionary...
+    Old_Joe = erase(joe),
+    try
+        {max_pids, 0} = ?TM:maybe_execute_pid_monitor(Overmax_Type, erlang, put, [joe, 5]),
+        erlang:yield(),
+        undefined = get(joe),
+        {max_pids, 0} = ?TM:maybe_execute_pid_monitor(Overmax_Type, erlang, put, [joe, 7]),
+        erlang:yield(),
+        undefined = get(joe)
+    after put(joe, Old_Joe)
+    end,
+
+    %% When spawned, it affects a new process dictionary, not ours.
+    Self = self(),
+    Old_Joe = erase(joe),
+    try
+        undefined = get(joe),
+        {New_Pid, _Monitor_Ref} = ?TM:maybe_execute_pid_monitor(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
+        false = (New_Pid =:= Self),
+        {links,        []} = process_info(New_Pid, links),
+        New_Pid ! {Self, get_pdict, joe},
         undefined = get(joe),
         ok = receive {get_pdict, New_Pid, 5} -> ok
              after 100 -> timeout
