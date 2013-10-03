@@ -6,7 +6,7 @@
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
 %%%   Concurrency limiter, caps number of processes based on user config,
-%%%   reverts to inline execution when demand is too high.
+%%%   reverts to inline execution or refuses to execute when demand is too high.
 %%% @since 0.9.0
 %%% @end
 %%%------------------------------------------------------------------------------
@@ -167,7 +167,8 @@ internal_execute_task(Task_Type, Mod, Fun, Args, Over_Limit_Action) ->
         %% Execute inline.
         _Over_Max ->
             case Over_Limit_Action of
-                refuse -> {max_pids, Max};
+                refuse -> decr_active_procs(Task_Type),
+                          {max_pids, Max};
                 inline -> _ = execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline),
                           ok
             end
@@ -236,7 +237,8 @@ internal_execute_pid(Task_Type, Mod, Fun, Args, Spawn_Type, Over_Limit_Action) -
         %% Too many processes already running...
         _Over_Max ->
             case Over_Limit_Action of
-                refuse -> {max_pids, Max};
+                refuse -> decr_active_procs(Task_Type),
+                          {max_pids, Max};
                 inline -> {inline, execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline)}
             end
     end.

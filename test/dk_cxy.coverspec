@@ -1,4 +1,8 @@
 {export, "./dk_cxy/logs/cover"}.
-{incl_mods, [ets_buffer, cxy_ctl]}.
 {level, details}.
 {incl_dirs, ["src/"]}.
+{incl_mods, [
+             ets_buffer,
+             cxy_ctl,
+             cxy_cache
+            ]}.

@@ -5,10 +5,14 @@
 {application, dk_cxy,
  [
   {id, "dk_cxy"},
-  {vsn, "0.9.5"},
+  {vsn, "0.9.6"},
   {description, "DuoMark concurrency tools"},
-  {modules,      [ets_buffer, cxy_ctl]},
-  {registered,   []},
+  {modules,      [
+                  ets_buffer,
+                  cxy_ctl,
+                  cxy_cache, cxy_cache_fsm, cxy_cache_sup
+                 ]},
+  {registered,   [cxy_cache_sup]},
   {applications, [kernel, stdlib, sasl]},
   {included_applications, []},
   {env, []}

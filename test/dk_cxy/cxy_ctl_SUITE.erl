@@ -138,6 +138,9 @@ check_maybe_execute_task(_Config) ->
         erlang:yield(),
         [] = ets:lookup(Ets_Table, joe),
         true = ets:delete(Ets_Table, joe),
+        [0] = [proplists:get_value(active_procs, Props)
+               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
+                  Type =:= Overmax_Type],
 
         %% Spawn update the shared ets table.
         ok = ?TM:maybe_execute_task(Spawn_Type, ets, insert_new, [Ets_Table, {joe, 4}]),
@@ -146,7 +149,11 @@ check_maybe_execute_task(_Config) ->
         ok = ?TM:maybe_execute_task(Spawn_Type, ets, insert, [Ets_Table, {joe, 6}]),
         erlang:yield(),
         [{joe, 6}] = ets:lookup(Ets_Table, joe),
-        true = ets:delete(Ets_Table, joe)
+        true = ets:delete(Ets_Table, joe),
+        [0] = [proplists:get_value(active_procs, Props)
+               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
+                  Type =:= Overmax_Type]
+
     after true = ets:delete(Ets_Table)
     end,
 
@@ -204,7 +211,11 @@ check_maybe_execute_pid_link(_Config) ->
         undefined = get(joe),
         {max_pids, 0} = ?TM:maybe_execute_pid_link(Overmax_Type, erlang, put, [joe, 7]),
         erlang:yield(),
-        undefined = get(joe)
+        undefined = get(joe),
+        [0] = [proplists:get_value(active_procs, Props)
+               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
+                  Type =:= Overmax_Type]
+
     after put(joe, Old_Joe)
     end,
 
@@ -221,7 +232,11 @@ check_maybe_execute_pid_link(_Config) ->
         undefined = get(joe),
         ok = receive {get_pdict, New_Pid, 5} -> ok
              after 100 -> timeout
-             end
+             end,
+        [0] = [proplists:get_value(active_procs, Props)
+               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
+                  Type =:= Overmax_Type]
+
     after put(joe, Old_Joe)
     end,
 
@@ -277,7 +292,11 @@ check_maybe_execute_pid_monitor(_Config) ->
         undefined = get(joe),
         {max_pids, 0} = ?TM:maybe_execute_pid_monitor(Overmax_Type, erlang, put, [joe, 7]),
         erlang:yield(),
-        undefined = get(joe)
+        undefined = get(joe),
+        [0] = [proplists:get_value(active_procs, Props)
+               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
+                  Type =:= Overmax_Type]
+
     after put(joe, Old_Joe)
     end,
 
@@ -293,7 +312,11 @@ check_maybe_execute_pid_monitor(_Config) ->
         undefined = get(joe),
         ok = receive {get_pdict, New_Pid, 5} -> ok
              after 100 -> timeout
-             end
+             end,
+        [0] = [proplists:get_value(active_procs, Props)
+               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
+                  Type =:= Overmax_Type]
+
     after put(joe, Old_Joe)
     end,
 
