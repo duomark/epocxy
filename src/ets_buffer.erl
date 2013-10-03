@@ -523,7 +523,7 @@ read_all_internal(Table_Name, Buffer_Name) ->
         false                                            -> {missing_ets_buffer, Buffer_Name};
         [?LIFO_NUM, _Max_Loc, _Write_Loc, _Old_Read_Loc] -> not_supported;
         [_Type_Num, _Max_Loc,  Write_Loc,  Write_Loc]    -> [];
-        [?FIFO_NUM, _Max_Loc,  Write_Loc, Old_Read_Loc]  ->
+        [?FIFO_NUM, _Max_Loc,  Write_Loc,  Old_Read_Loc] ->
             read_internal_finish(fifo_reserve_read_all_cmd(Write_Loc, Old_Read_Loc), Table_Name, Buffer_Name, fifo);
         [?RING_NUM, _Max_Loc,  Write_Loc, _Old_Read_Loc] ->
             read_internal_finish(ring_reserve_read_all_cmd(Write_Loc), Table_Name, Buffer_Name, ring)
