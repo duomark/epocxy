@@ -9,7 +9,8 @@
          check_concurrency_types/1,
          check_execute_task/1,        check_maybe_execute_task/1,
          check_execute_pid_link/1,    check_maybe_execute_pid_link/1,
-         check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1
+         check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1,
+         check_multiple_init_calls/1
         ]).
 
 %% Spawned functions
@@ -25,7 +26,8 @@ all() -> [
           check_concurrency_types,
           check_execute_task,        check_maybe_execute_task,
           check_execute_pid_link,    check_maybe_execute_pid_link,
-          check_execute_pid_monitor, check_maybe_execute_pid_monitor
+          check_execute_pid_monitor, check_maybe_execute_pid_monitor,
+          check_multiple_init_calls
          ].
 
 -type config() :: proplists:proplist().
@@ -320,6 +322,17 @@ check_maybe_execute_pid_monitor(_Config) ->
     after put(joe, Old_Joe)
     end,
 
+    ok.
+
+-spec check_multiple_init_calls(proplists:proplist()) -> ok.
+check_multiple_init_calls(_Config) ->
+    Limits = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
+    [ok = ?TM:init([L]) || L <- Limits],
+    Types = ?TM:concurrency_types(),
+    [[a, -1, 0, 0], [b, 17, 0, 5], [c, 8, 0, 0], [d, 0, 0, 7]]
+        = [[proplists:get_value(P, This_Type_Props)
+            || P <- [task_type, max_procs, active_procs, max_history]]
+           || This_Type_Props <- Types],
     ok.
 
 -spec put_pdict(atom(), any()) -> {get_pdict, pid(), any()}.
