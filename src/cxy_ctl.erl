@@ -126,7 +126,10 @@ make_proc_params(Acc, Type, Max_Procs, Max_History) ->
     
 do_init(Buffer_Params, Cxy_Params) ->
     ets_buffer:create(Buffer_Params),
-    _ = ets:new(?MODULE, [named_table, ordered_set, public, {write_concurrency, true}]),
+    case ets:info(?MODULE, named_table) of
+        undefined -> _ = ets:new(?MODULE, [named_table, ordered_set, public, {write_concurrency, true}]);
+        _ -> ok
+    end,
     _ = [ets:insert_new(?MODULE, Proc_Values) || Proc_Values <- Cxy_Params],
     ok.
 
