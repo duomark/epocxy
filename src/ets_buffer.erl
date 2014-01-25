@@ -178,7 +178,7 @@ one_buffer(Table_Name, Buffer_Name) ->
 
 %% FIFO bumps only write location to publish, read is trailing behind.
 fifo_reserve_write_cmd() ->  {#ets_buffer.reserve_loc, 1}.
-fifo_publish_write_cmd() ->  {#ets_buffer.write_loc,   1}.
+fifo_publish_write_cmd() -> [{#ets_buffer.write_loc,   1}, {#ets_buffer.read_loc, 0}].
 
 %% FIFO read reserve atomically gets latest read location and increments it.
 fifo_reserve_read_cmd(Num_Items, Write_Loc) ->
@@ -191,7 +191,7 @@ fifo_reserve_read_all_cmd(Write_Loc, Read_Loc) ->
 %% Ring bumps write location, but only moves read location if the write pointer wraps to it.
 ring_reserve_write_cmd(Max)                              -> [{#ets_buffer.reserve_loc, 1, Max, 1}, {#ets_buffer.read_loc, 0}].
 ring_publish_write_cmd(Max,  Reserve_Loc,  Reserve_Loc)  -> [{#ets_buffer.write_loc,   1, Max, 1}, {#ets_buffer.read_loc, 1, Max, 1}];
-ring_publish_write_cmd(Max, _Reserve_Loc, _Old_Read_Loc) ->  {#ets_buffer.write_loc,   1, Max, 1}.
+ring_publish_write_cmd(Max, _Reserve_Loc, _Old_Read_Loc) -> [{#ets_buffer.write_loc,   1, Max, 1}, {#ets_buffer.read_loc, 0}].
 
 %% Increment read pointer
 ring_reserve_read_cmd(Num_Items, Write_Loc, Max_Loc, Read_Loc) ->
@@ -240,7 +240,7 @@ buffer_data(Name, Loc, Data) ->
 %%% External API for colocated ets_buffers (in a single ?MODULE ets table)
 %%%------------------------------------------------------------------------------
 
--spec list() -> proplists:proplist().
+-spec list() -> [proplists:proplist()].
 -spec list(buffer_name()) -> proplists:proplist().
 -spec create([{buffer_name(), ring, buffer_size()}
               | {buffer_name(), fifo | lifo}]) -> ets_buffer.
@@ -249,7 +249,7 @@ buffer_data(Name, Loc, Data) ->
 -spec clear(buffer_name()) -> boolean().
 -spec delete(buffer_name()) -> boolean().
 
--spec write(buffer_name(), buffer_data()) -> true | buffer_error().
+-spec write(buffer_name(), buffer_data()) -> non_neg_integer() | true | buffer_error().
 -spec read(buffer_name()) -> [buffer_data()] | buffer_error().
 -spec read(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
 -spec read_all(buffer_name()) -> [buffer_data()] | buffer_error().
@@ -366,7 +366,7 @@ capacity(Buffer_Name) when is_atom(Buffer_Name) ->
 -spec clear_dedicated(buffer_name()) -> boolean().
 -spec delete_dedicated(buffer_name()) -> boolean().
 
--spec write_dedicated(buffer_name(), any()) -> true.
+-spec write_dedicated(buffer_name(), any()) -> non_neg_integer() | true | buffer_error().
 -spec read_dedicated(buffer_name()) -> [buffer_data()] | buffer_error().
 -spec read_dedicated(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
 -spec read_all_dedicated(buffer_name()) -> [buffer_data()] | buffer_error().
@@ -497,24 +497,26 @@ write_internal(Table_Name, Buffer_Name, Data) ->
     case get_buffer_type(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
         [Type_Num, Max_Loc] ->
-            _ = case buffer_type(Type_Num) of
+                case buffer_type(Type_Num) of
 
                     %% FIFO continuously increments...
                     fifo -> Write_Loc = ets:update_counter(Table_Name, meta_key(Buffer_Name), fifo_reserve_write_cmd()),
                             true = ets:insert(Table_Name, buffer_data(Buffer_Name, Write_Loc, Data)),
-                            ets:update_counter(Table_Name, meta_key(Buffer_Name), fifo_publish_write_cmd());
+                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, meta_key(Buffer_Name), fifo_publish_write_cmd()),
+                            compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc);
 
                     %% Ring buffer wraps around on inserts...
                     ring -> [Write_Loc, Read_Loc]  = ets:update_counter(Table_Name, meta_key(Buffer_Name), ring_reserve_write_cmd(Max_Loc)),
                             true = ets:insert(Table_Name, buffer_data(Buffer_Name, Write_Loc, Data)),
-                            ets:update_counter(Table_Name, meta_key(Buffer_Name), ring_publish_write_cmd(Max_Loc, Write_Loc, Read_Loc));
+                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, meta_key(Buffer_Name), ring_publish_write_cmd(Max_Loc, Write_Loc, Read_Loc)),
+                            compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc);
 
                     %% LIFO continuously decrements...
                     lifo -> Write_Loc = ets:update_counter(Table_Name, meta_key(Buffer_Name), lifo_reserve_write_cmd()),
                             true = ets:insert(Table_Name, buffer_data(Buffer_Name, Write_Loc, Data)),
-                            ets:update_counter(Table_Name, meta_key(Buffer_Name), lifo_publish_write_cmd(Write_Loc))
-                end,
-            true
+                            _ = ets:update_counter(Table_Name, meta_key(Buffer_Name), lifo_publish_write_cmd(Write_Loc)),
+                            true
+                end
     end.
 
 %% Use read pointer to reserve entries, obtain and then delete them.
@@ -668,19 +670,22 @@ num_entries_internal(Table_Name, Buffer_Name) ->
     case get_buffer_readw(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
         [Type_Num, Max_Loc, Write_Loc, Raw_Read_Loc] ->
-            Read_Loc = case {Write_Loc =:= 0, Raw_Read_Loc} of
-                           {true,  _} -> 0;             %% Nothing ever written
-                           {false, 0} -> 0;             %% Written, but nothing ever read
-                           {false, _} -> Raw_Read_Loc   %% Both written and read before
-                       end,
-            case buffer_type(Type_Num) of
-                lifo -> not_supported;                  %% Note: R/W indexes are negative
-                fifo -> Write_Loc - Read_Loc;
-                ring -> case Write_Loc >= Read_Loc of
-                            true  -> Write_Loc - Read_Loc;
-                            false -> (Max_Loc - Read_Loc) + Write_Loc
-                        end
-            end
+            compute_num_entries(Type_Num, Max_Loc, Write_Loc, Raw_Read_Loc)
+    end.
+
+compute_num_entries(Type_Num, Max_Loc, Write_Loc, Raw_Read_Loc) ->
+    Read_Loc = case {Write_Loc =:= 0, Raw_Read_Loc} of
+                   {true,  _} -> 0;             %% Nothing ever written
+                   {false, 0} -> 0;             %% Written, but nothing ever read
+                   {false, _} -> Raw_Read_Loc   %% Both written and read before
+               end,
+    case buffer_type(Type_Num) of
+        lifo -> not_supported;                  %% Note: R/W indexes are negative
+        fifo -> Write_Loc - Read_Loc;
+        ring -> case Write_Loc >= Read_Loc of
+                    true  -> Write_Loc - Read_Loc;
+                    false -> (Max_Loc - Read_Loc) + Write_Loc
+                end
     end.
 
 %% Ring buffers have capacity limits; all others do not
