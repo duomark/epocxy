@@ -68,7 +68,9 @@
                    fifo_reserve_read_all_cmd/2,
                    lifo_reserve_write_cmd/0, %% lifo_reserve_read_cmd/2, 
                    get_buffer_type/2, get_buffer_readw/2, get_buffer_write/2,
-                   get_buffer_type_and_pos/3
+                   get_buffer_type_and_pos/3,
+                   insert_ets_internal/4,
+                   set_high_water/3, set_high_water_cmd/1
                   ]}).
 
 %% External interface
@@ -80,6 +82,7 @@
          history/1, history/2,
          clear/1, delete/1, list/0, list/1,
          num_entries/1, capacity/1,
+         clear_high_water/1,
 
          %% API when each buffer is in a dedicated named ets table.
          create_dedicated/2, create_dedicated/3,
@@ -87,7 +90,8 @@
          read_dedicated/1, read_dedicated/2, read_all_dedicated/1,
          history_dedicated/1, history_dedicated/2,
          clear_dedicated/1, delete_dedicated/1, list_dedicated/1,
-         num_entries_dedicated/1, capacity_dedicated/1
+         num_entries_dedicated/1, capacity_dedicated/1,
+         clear_high_water_dedicated/1
         ]).
 
 -type buffer_name() :: atom().
@@ -130,6 +134,7 @@ buffer_type_num(lifo) -> 3.
 -record(ets_buffer, {
           name                     :: {meta, buffer_name()} | {meta, '_'},
           size        = 0          :: buffer_size()         | '_',
+          high_water  = 0          :: buffer_size()         | '_',
           type        = ?RING_NUM  :: buffer_type_num()     | '_',   %% Default is ring buffer
           reserve_loc = 0          :: non_neg_integer()     | '_',
           write_loc   = 0          :: non_neg_integer()     | '_',
@@ -139,10 +144,10 @@ buffer_type_num(lifo) -> 3.
 meta_key(Buffer_Name) -> {meta, Buffer_Name}.
     
 %% Convert record to proplist.
-make_buffer_proplist(#ets_buffer{name={meta, Name}, size=Size, type=Type_Num,
+make_buffer_proplist(#ets_buffer{name={meta, Name}, size=Size, high_water=High_Water, type=Type_Num,
                                  reserve_loc=Reserve_Loc, write_loc=Write_Loc, read_loc=Read_Loc}) ->
-    [{name, Name}, {size, Size}, {type, buffer_type(Type_Num)},
-     {reserve_loc, Reserve_Loc}, {write_loc, Write_Loc}, {read_loc, Read_Loc}].
+    [{name, Name}, {size, Size}, {high_water, High_Water}, {type, buffer_type(Type_Num)},
+     {reserve_loc, Reserve_Loc}, {write_loc, Write_Loc},   {read_loc, Read_Loc}].
 
 %% Match specs for buffers.
 all_buffers(Table_Name) ->
@@ -207,6 +212,8 @@ ring_reserve_read_all_cmd(Write_Loc) ->
 %% LIFO bumps write location, but only moves read location if it is not already past the reserve/write for this publish.
 lifo_reserve_write_cmd()            ->  {#ets_buffer.reserve_loc, -1}.
 lifo_publish_write_cmd(Reserve_Loc) -> [{#ets_buffer.write_loc,   -1}, {#ets_buffer.read_loc, 0, Reserve_Loc, Reserve_Loc}].
+
+set_high_water_cmd(Count) -> {#ets_buffer.high_water, Count}.
     
 
 %%%------------------------------------------------------------------------------
@@ -257,6 +264,7 @@ buffer_data(Name, Loc, Data) ->
 -spec history(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
 -spec num_entries(buffer_name()) -> non_neg_integer() | buffer_error().
 -spec capacity(buffer_name()) -> pos_integer() | unlimited | buffer_error().
+-spec clear_high_water(buffer_name()) -> true | buffer_error().
 
 
 %% @doc Get a set of proplists for all buffers in the shared ets table.
@@ -355,6 +363,10 @@ num_entries(Buffer_Name) when is_atom(Buffer_Name) ->
 capacity(Buffer_Name) when is_atom(Buffer_Name) ->
     capacity_internal(?MODULE, Buffer_Name).
 
+%% @doc Reset the high water count to zero.
+clear_high_water(Buffer_Name) when is_atom(Buffer_Name) ->
+    clear_high_water_internal(?MODULE, Buffer_Name).
+
     
 %%%------------------------------------------------------------------------------
 %%% External API for separately named ets_buffers (one per ets table)
@@ -374,6 +386,7 @@ capacity(Buffer_Name) when is_atom(Buffer_Name) ->
 -spec history_dedicated(buffer_name(), pos_integer()) -> [buffer_data()].
 -spec num_entries_dedicated(buffer_name()) -> non_neg_integer() | buffer_error().
 -spec capacity_dedicated(buffer_name()) -> pos_integer() | unlimited | buffer_error().
+-spec clear_high_water_dedicated(buffer_name()) -> true | buffer_error().
 
 
 %% @doc Get a single proplist for the buffer in a named ets table.
@@ -460,6 +473,10 @@ num_entries_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 capacity_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
     capacity_internal(Buffer_Name, Buffer_Name).
 
+%% @doc Return the potential capacity of the buffer
+clear_high_water_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
+    clear_high_water_internal(Buffer_Name, Buffer_Name).
+
 
 %%%------------------------------------------------------------------------------
 %%% Internal functions
@@ -471,7 +488,7 @@ capacity_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 -define(WRITE_LOC,   {#ets_buffer.write_loc,   0}).
 -define(RESERVE_LOC, {#ets_buffer.reserve_loc, 0}).
 
--define(TYPE_AND_SIZE,  {#ets_buffer.type, 0}, {#ets_buffer.size, 0}).
+-define(TYPE_AND_SIZE,  {#ets_buffer.type, 0}, {#ets_buffer.size, 0}, {#ets_buffer.high_water, 0}).
 -define(TYPE_AND_WRITE, ?TYPE_AND_SIZE,  ?WRITE_LOC).
 -define(TYPE_AND_READW, ?TYPE_AND_WRITE, ?READ_LOC).
 
@@ -494,40 +511,52 @@ clear_internal(Table_Name, Buffer_Name) ->
 
 %% All writes use 1) reserve, 2) write, 3) publish semantics.
 write_internal(Table_Name, Buffer_Name, Data) ->
+    Meta_Key = meta_key(Buffer_Name),
     case get_buffer_type(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
-        [Type_Num, Max_Loc] ->
+        [Type_Num, Max_Loc, High_Water_Count] ->
                 case buffer_type(Type_Num) of
 
                     %% FIFO continuously increments...
-                    fifo -> Write_Loc = ets:update_counter(Table_Name, meta_key(Buffer_Name), fifo_reserve_write_cmd()),
-                            true = ets:insert(Table_Name, buffer_data(Buffer_Name, Write_Loc, Data)),
-                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, meta_key(Buffer_Name), fifo_publish_write_cmd()),
-                            compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc);
+                    fifo -> Write_Loc = ets:update_counter(Table_Name, Meta_Key, fifo_reserve_write_cmd()),
+                            true = insert_ets_internal(Table_Name, Buffer_Name, Write_Loc, Data),
+                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, Meta_Key, fifo_publish_write_cmd()),
+                            Num_Entries = compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc),
+                            Num_Entries > High_Water_Count andalso set_high_water(Table_Name, Meta_Key, Num_Entries),
+                            Num_Entries;
 
                     %% Ring buffer wraps around on inserts...
-                    ring -> [Write_Loc, Read_Loc]  = ets:update_counter(Table_Name, meta_key(Buffer_Name), ring_reserve_write_cmd(Max_Loc)),
-                            true = ets:insert(Table_Name, buffer_data(Buffer_Name, Write_Loc, Data)),
-                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, meta_key(Buffer_Name), ring_publish_write_cmd(Max_Loc, Write_Loc, Read_Loc)),
-                            compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc);
+                    ring -> [Write_Loc, Read_Loc]  = ets:update_counter(Table_Name, Meta_Key, ring_reserve_write_cmd(Max_Loc)),
+                            true = insert_ets_internal(Table_Name, Buffer_Name, Write_Loc, Data),
+                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, Meta_Key, ring_publish_write_cmd(Max_Loc, Write_Loc, Read_Loc)),
+                            Num_Entries = compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc),
+                            Num_Entries > High_Water_Count andalso set_high_water(Table_Name, Meta_Key, Num_Entries),
+                            Num_Entries;
 
                     %% LIFO continuously decrements...
-                    lifo -> Write_Loc = ets:update_counter(Table_Name, meta_key(Buffer_Name), lifo_reserve_write_cmd()),
-                            true = ets:insert(Table_Name, buffer_data(Buffer_Name, Write_Loc, Data)),
-                            _ = ets:update_counter(Table_Name, meta_key(Buffer_Name), lifo_publish_write_cmd(Write_Loc)),
+                    lifo -> Write_Loc = ets:update_counter(Table_Name, Meta_Key, lifo_reserve_write_cmd()),
+                            true = insert_ets_internal(Table_Name, Buffer_Name, Write_Loc, Data),
+                            _ = ets:update_counter(Table_Name, Meta_Key, lifo_publish_write_cmd(Write_Loc)),
+                            %% High water mark not possible with current LIFO approach
                             true
                 end
     end.
+
+insert_ets_internal(Table_Name, Buffer_Name, Write_Loc, Data) ->
+    ets:insert(Table_Name, buffer_data(Buffer_Name, Write_Loc, Data)).
+
+set_high_water(Table_Name, Meta_Key, New_High_Water) ->
+    ets:update_element(Table_Name, Meta_Key, set_high_water_cmd(New_High_Water)).
 
 %% Use read pointer to reserve entries, obtain and then delete them.
 read_all_internal(Table_Name, Buffer_Name) ->
     case get_buffer_readw(Table_Name, Buffer_Name) of
         false                                            -> {missing_ets_buffer, Buffer_Name};
-        [?LIFO_NUM, _Max_Loc, _Write_Loc, _Old_Read_Loc] -> not_supported;
-        [_Type_Num, _Max_Loc,  Write_Loc,  Write_Loc]    -> [];
-        [?FIFO_NUM, _Max_Loc,  Write_Loc,  Old_Read_Loc] ->
+        [?LIFO_NUM, _Max_Loc, _High_Water, _Write_Loc, _Old_Read_Loc] -> not_supported;
+        [_Type_Num, _Max_Loc, _High_Water,  Write_Loc,  Write_Loc]    -> [];
+        [?FIFO_NUM, _Max_Loc, _High_Water,  Write_Loc,  Old_Read_Loc] ->
             read_internal_finish(fifo_reserve_read_all_cmd(Write_Loc, Old_Read_Loc), Table_Name, Buffer_Name, fifo);
-        [?RING_NUM, _Max_Loc,  Write_Loc, _Old_Read_Loc] ->
+        [?RING_NUM, _Max_Loc, _High_Water,  Write_Loc, _Old_Read_Loc] ->
             read_internal_finish(ring_reserve_read_all_cmd(Write_Loc), Table_Name, Buffer_Name, ring)
     end.
 
@@ -539,7 +568,7 @@ read_internal_finish(New_Read_Loc_Cmd, Table_Name, Buffer_Name, Buffer_Type) ->
 read_internal(Table_Name, Buffer_Name, Num_Items) ->
     case get_buffer_readw(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
-        [Type_Num, Max_Loc, Write_Loc, Old_Read_Loc] ->
+        [Type_Num, Max_Loc, _High_Water, Write_Loc, Old_Read_Loc] ->
             case buffer_type(Type_Num) of
                 fifo -> read_internal_finish(fifo_reserve_read_cmd(Num_Items, Write_Loc), Table_Name, Buffer_Name, fifo);
                 ring -> read_internal_finish(ring_reserve_read_cmd(Num_Items, Write_Loc, Max_Loc, Old_Read_Loc), Table_Name, Buffer_Name, ring);
@@ -615,7 +644,7 @@ disjoint_match_specs(Buffer_Name, Read_Loc, End_Loc, Operator) ->
 history_internal(Table_Name, Buffer_Name) ->
     case get_buffer_write(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
-        [Type_Num, Max_Loc, Write_Pos] ->
+        [Type_Num, Max_Loc, _High_Water, Write_Pos] ->
             case buffer_type(Type_Num) of
                 ring -> history_ring(Table_Name, Buffer_Name, Max_Loc, Write_Pos, Max_Loc);
                 fifo -> [Elem || [Elem] <- ets:match(Table_Name, buffer_data(Buffer_Name, '_', '$1'))];
@@ -626,7 +655,7 @@ history_internal(Table_Name, Buffer_Name) ->
 history_internal(Table_Name, Buffer_Name, Num_Items) ->
     case get_buffer_write(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
-        [Type_Num, Max_Loc, Write_Pos] ->
+        [Type_Num, Max_Loc, _High_Water, Write_Pos] ->
             True_Num_Items = case Max_Loc of 0 -> Num_Items; _ -> min(Num_Items, Max_Loc) end,
             case buffer_type(Type_Num) of
                 ring          -> history_ring(Table_Name, Buffer_Name, True_Num_Items, Write_Pos, Max_Loc);
@@ -669,7 +698,7 @@ history_ring_get( Table_Name,  Buffer_Name, Num_Items,  Start_Pos) ->
 num_entries_internal(Table_Name, Buffer_Name) ->
     case get_buffer_readw(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
-        [Type_Num, Max_Loc, Write_Loc, Raw_Read_Loc] ->
+        [Type_Num, Max_Loc, _High_Water, Write_Loc, Raw_Read_Loc] ->
             compute_num_entries(Type_Num, Max_Loc, Write_Loc, Raw_Read_Loc)
     end.
 
@@ -692,10 +721,13 @@ compute_num_entries(Type_Num, Max_Loc, Write_Loc, Raw_Read_Loc) ->
 capacity_internal(Table_Name, Buffer_Name) ->
     case get_buffer_readw(Table_Name, Buffer_Name) of
         false -> {missing_ets_buffer, Buffer_Name};
-        [Type_Num, Max_Loc, _Write_Loc, _Read_Loc] ->
+        [Type_Num, Max_Loc, _High_Water, _Write_Loc, _Read_Loc] ->
             case buffer_type(Type_Num) of
                 fifo -> unlimited;
                 lifo -> unlimited;
                 ring -> Max_Loc
             end
     end.
+
+clear_high_water_internal(Table_Name, Buffer_Name) ->
+    set_high_water(Table_Name, meta_key(Buffer_Name), 0).
