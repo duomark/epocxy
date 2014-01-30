@@ -56,8 +56,23 @@ check_shared_error(_Config) ->
     1 = ?TM:write(Tab1, 15),
     [15] = ?TM:history(Tab1),
     [15] = ?TM:history(Tab1, 5),
+    [{Now1, 15}] = ?TM:history_timestamped(Tab1),
+    [{Now1, 15}] = ?TM:history_timestamped(Tab1, 5),
+
     [15] = ?TM:read(Tab1),
     [  ] = ?TM:read_all(Tab1),
+       0 = ?TM:num_entries(Tab1),
+      20 = ?TM:capacity(Tab1),
+
+    1 = ?TM:write(Tab1, 15),
+    [{_Now2, 15}] = ?TM:read_timestamped(Tab1),
+    [  ] = ?TM:read_all_timestamped(Tab1),
+       0 = ?TM:num_entries(Tab1),
+      20 = ?TM:capacity(Tab1),
+
+    1 = ?TM:write(Tab1, 35),
+    2 = ?TM:write(Tab1, 45),
+    [{_Now3, 35}, {_Now4, 45}] = ?TM:read_all_timestamped(Tab1),
        0 = ?TM:num_entries(Tab1),
       20 = ?TM:capacity(Tab1),
 
@@ -89,8 +104,29 @@ check_dedicated_error(_Config) ->
     1 = ?TM:write_dedicated(Tab1, 15),
     [15] = ?TM:history_dedicated(Tab1),
     [15] = ?TM:history_dedicated(Tab1, 5),
+    [{Now1, 15}] = ?TM:history_timestamped_dedicated(Tab1),
+    [{Now1, 15}] = ?TM:history_timestamped_dedicated(Tab1, 5),
+
     [15] = ?TM:read_dedicated(Tab1),
     [  ] = ?TM:read_all_dedicated(Tab1),
+       0 = ?TM:num_entries_dedicated(Tab1),
+      20 = ?TM:capacity_dedicated(Tab1),
+
+    1 = ?TM:write_dedicated(Tab1, 15),
+    [{_Now2, 15}] = ?TM:read_timestamped_dedicated(Tab1),
+    [  ] = ?TM:read_all_timestamped_dedicated(Tab1),
+       0 = ?TM:num_entries_dedicated(Tab1),
+      20 = ?TM:capacity_dedicated(Tab1),
+
+    1 = ?TM:write_dedicated(Tab1, 35),
+    2 = ?TM:write_dedicated(Tab1, 45),
+    [35, 45] = ?TM:read_all_dedicated(Tab1),
+       0 = ?TM:num_entries_dedicated(Tab1),
+      20 = ?TM:capacity_dedicated(Tab1),
+
+    1 = ?TM:write_dedicated(Tab1, 37),
+    2 = ?TM:write_dedicated(Tab1, 47),
+    [{_Now3, 37}, {_Now4, 47}] = ?TM:read_all_timestamped_dedicated(Tab1),
        0 = ?TM:num_entries_dedicated(Tab1),
       20 = ?TM:capacity_dedicated(Tab1),
 
@@ -555,14 +591,17 @@ check_shared_ring_edges(_Config) ->
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 3),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 8),
+    2 = ?TM:num_entries(Tab1),
     [{red, 2}] = ?TM:read(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 3),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 8),
+    1 = ?TM:num_entries(Tab1),
     [{granny, 5}] = ?TM:read(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 3),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 8),
+    0 = ?TM:num_entries(Tab1),
 
     [{winesap, 3}] = ?TM:history(Tab2),
     [{winesap, 3}] = ?TM:history(Tab2, 3),
@@ -723,6 +762,7 @@ check_dedicated_read_all(_Config) ->
     [{red,        2}, {golden, 1}] = ?TM:read_all_dedicated(Tab1),
     [{macintosh, 34}, {winesap, 18}, {granny, 8}] = ?TM:read_all_dedicated(Tab2),
     not_supported = ?TM:read_all_dedicated(Tab3),
+    [0, 0, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
 
     Data2 = [
               {Tab1, {green,  3}}, {Tab1, {orange, 8}},
