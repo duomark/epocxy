@@ -254,31 +254,32 @@ execute_wrapper(Mod, Fun, Args, Task_Type, _Max_History, false, Spawn_Or_Inline)
              after decr_active_procs(Task_Type)
              end,
     case Result of
-        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data);
+        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data, erlang:get_stacktrace());
         Result             -> Result
     end;
 
 %% Otherwise, we incur the overhead cost of recording elapsed time history.
 execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, Spawn_Or_Inline) ->
+    MFA = {Mod, Fun, Args},
     Spawn = os:timestamp(),
     Result = try apply(Mod, Fun, Args)
-             catch error:badarg -> {error, {ets_table_failure, {{Mod, Fun, Args}, Task_Type, Max_History, Start, Spawn_Or_Inline}}};
-                   Error:Type   -> {error, {mfa_failure, {{Error, Type}, {Mod, Fun, Args}, Max_History, Task_Type, Spawn_Or_Inline}}}
+             catch error:badarg -> {error, {ets_table_failure,          {MFA, Task_Type, Max_History, Start, Spawn_Or_Inline}}};
+                   Error:Type   -> {error, {mfa_failure, {{Error, Type}, MFA, Task_Type, Max_History, Start, Spawn_Or_Inline}}}
              after
                  decr_active_procs(Task_Type),
                  case Spawn_Or_Inline of
-                     spawn  -> update_spawn_times (Task_Type, {Mod, Fun, Args}, Start, Spawn, os:timestamp());
-                     inline -> update_inline_times(Task_Type, {Mod, Fun, Args}, Start, Spawn, os:timestamp())
+                     spawn  -> update_spawn_times (Task_Type, MFA, Start, Spawn, os:timestamp());
+                     inline -> update_inline_times(Task_Type, MFA, Start, Spawn, os:timestamp())
                  end
              end,
     case Result of
-        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data);
+        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data, erlang:get_stacktrace());
         Result             -> Result
     end.
 
--spec fail_wrapper(spawn | inline, any()) -> no_return().
-fail_wrapper(spawn,  Call_Data) -> erlang:error(spawn_failure,  [Call_Data]);
-fail_wrapper(inline, Call_Data) -> exit({inline_failure, [Call_Data]}).
+-spec fail_wrapper(spawn | inline, any(), any()) -> no_return().
+fail_wrapper(spawn,  Call_Data, Stacktrace) -> erlang:error(spawn_failure,  [Call_Data, Stacktrace]);
+fail_wrapper(inline, Call_Data, Stacktrace) -> exit       ({inline_failure, [Call_Data, Stacktrace]}).
 
 
 %% @doc
