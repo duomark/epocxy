@@ -263,8 +263,7 @@ execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, Spawn_Or_Inline) 
     MFA = {Mod, Fun, Args},
     Spawn = os:timestamp(),
     Result = try apply(Mod, Fun, Args)
-             catch error:badarg -> {error, {ets_table_failure,          {MFA, Task_Type, Max_History, Start, Spawn_Or_Inline}}};
-                   Error:Type   -> {error, {mfa_failure, {{Error, Type}, MFA, Task_Type, Max_History, Start, Spawn_Or_Inline}}}
+             catch Error:Type -> {error, {mfa_failure, {{Error, Type}, MFA, Task_Type, Max_History, Start, Spawn_Or_Inline}}}
              after
                  decr_active_procs(Task_Type),
                  case Spawn_Or_Inline of
