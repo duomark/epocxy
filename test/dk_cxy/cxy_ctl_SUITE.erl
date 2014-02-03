@@ -4,28 +4,32 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([
+         check_proc_dict_helper/1,
          check_no_timer_limits/1,     check_with_timer_limits/1,
          check_atom_limits/1,         check_limit_errors/1,
          check_concurrency_types/1,
          check_execute_task/1,        check_maybe_execute_task/1,
          check_execute_pid_link/1,    check_maybe_execute_pid_link/1,
-         check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1
+         check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1,
+         check_copying_dict/1
         ]).
 
 %% Spawned functions
--export([put_pdict/2]).
+-export([put_pdict/2, fetch_ages/0]).
 
 -include_lib("common_test/include/ct.hrl").
 
 -spec all() -> [atom()].
 
 all() -> [
+          check_proc_dict_helper,
           check_no_timer_limits,     check_with_timer_limits,
           check_atom_limits,         check_limit_errors,
           check_concurrency_types,
           check_execute_task,        check_maybe_execute_task,
           check_execute_pid_link,    check_maybe_execute_pid_link,
-          check_execute_pid_monitor, check_maybe_execute_pid_monitor
+          check_execute_pid_monitor, check_maybe_execute_pid_monitor,
+          check_copying_dict
          ].
 
 -type config() :: proplists:proplist().
@@ -39,7 +43,13 @@ end_per_suite(Config)  -> Config.
 -define(TM, cxy_ctl).
 
 
--spec check_no_timer_limits(proplists:proplist()) -> ok.
+-spec check_proc_dict_helper(config()) -> ok.
+check_proc_dict_helper(_Config) ->
+    {'$$dict_prop', {boo, 22}} = ?TM:make_process_dictionary_default_value(boo, 22),
+    {'$$dict_prop', {{k,v}, {key,value}}} = ?TM:make_process_dictionary_default_value({k,v}, {key,value}),
+    ok.
+
+-spec check_no_timer_limits(config()) -> ok.
 check_no_timer_limits(_Config) ->
     Limits = [{a, 15, 0}, {b, 35, 0}],
     ok = ?TM:init(Limits),
@@ -49,7 +59,7 @@ check_no_timer_limits(_Config) ->
     true = lists:member({b, 35, 0, 0}, All_Entries),
     ok.
 
--spec check_with_timer_limits(proplists:proplist()) -> ok.
+-spec check_with_timer_limits(config()) -> ok.
 check_with_timer_limits(_Config) ->
     Limits = [{a, 15, 5}, {b, 35, 0}, {c, 17, 4}],
     ok = ?TM:init(Limits),
@@ -60,7 +70,7 @@ check_with_timer_limits(_Config) ->
     true = lists:member({c, 17, 0, 4}, All_Entries),
     ok.
 
--spec check_atom_limits(proplists:proplist()) -> ok.
+-spec check_atom_limits(config()) -> ok.
 check_atom_limits(_Config) ->
     Limits = [{a, unlimited, 0},   {b, unlimited, 5},
               {c, inline_only, 0}, {d, inline_only, 7}],
@@ -73,7 +83,7 @@ check_atom_limits(_Config) ->
     true = lists:member({d,  0, 0, 7}, All_Entries),
     ok.
 
--spec check_limit_errors(proplists:proplist()) -> ok.
+-spec check_limit_errors(config()) -> ok.
 check_limit_errors(_Config) ->
     Limits1 = [{a, unlimited, -1}, {b, 5, 0}, {c, unlimited, 0}],
     {error, {invalid_init_args, [{a, unlimited, -1}]}} = ?TM:init(Limits1),
@@ -81,7 +91,7 @@ check_limit_errors(_Config) ->
     {error, {invalid_init_args, Limits2}} = ?TM:init(Limits2),
     ok.
 
--spec check_concurrency_types(proplists:proplist()) -> ok.
+-spec check_concurrency_types(config()) -> ok.
 check_concurrency_types(_Config) ->
     Limits = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
     ok = ?TM:init(Limits),
@@ -93,7 +103,7 @@ check_concurrency_types(_Config) ->
     ok.
 
 %% execute_task runs a background task without feedback.
--spec check_execute_task(proplists:proplist()) -> ok.
+-spec check_execute_task(config()) -> ok.
 check_execute_task(_Config) ->
     {Inline_Type, Spawn_Type} = {ets_inline, ets_spawn},
     Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
@@ -122,7 +132,7 @@ check_execute_task(_Config) ->
     ok.
 
 %% maybe_execute_task runs a background task without feedback but not more than limit.
--spec check_maybe_execute_task(proplists:proplist()) -> ok.
+-spec check_maybe_execute_task(config()) -> ok.
 check_maybe_execute_task(_Config) ->
     {Overmax_Type, Spawn_Type} = {ets_overmax, ets_spawn},
     Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
@@ -160,7 +170,7 @@ check_maybe_execute_task(_Config) ->
     ok.
 
 %% execute_pid_link runs a task with a return value of Pid or {inline, Result}.
--spec check_execute_pid_link(proplists:proplist()) -> ok.
+-spec check_execute_pid_link(config()) -> ok.
 check_execute_pid_link(_Config) ->
     {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
     Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
@@ -197,7 +207,7 @@ check_execute_pid_link(_Config) ->
     ok.
 
 %% maybe_execute_pid_link runs a task with a return value of Pid or {max_pids, Max}.
--spec check_maybe_execute_pid_link(proplists:proplist()) -> ok.
+-spec check_maybe_execute_pid_link(config()) -> ok.
 check_maybe_execute_pid_link(_Config) ->
     {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
     Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
@@ -243,7 +253,7 @@ check_maybe_execute_pid_link(_Config) ->
     ok.
 
 %% execute_pid_monitor runs a task with a return value of {Pid, Monitor_Ref} or {inline, Result}.
--spec check_execute_pid_monitor(proplists:proplist()) -> ok.
+-spec check_execute_pid_monitor(config()) -> ok.
 check_execute_pid_monitor(_Config) ->
     {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
     Limits = [{Inline_Type, 0, 0}, {Spawn_Type, 3, 5}],
@@ -278,7 +288,7 @@ check_execute_pid_monitor(_Config) ->
     ok.
 
 %% maybe_execute_pid_monitor runs a task with a return value of {Pid, Monitor_Ref} or {max_pids, Max}.
--spec check_maybe_execute_pid_monitor(proplists:proplist()) -> ok.
+-spec check_maybe_execute_pid_monitor(config()) -> ok.
 check_maybe_execute_pid_monitor(_Config) ->
     {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
     Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
@@ -325,4 +335,54 @@ check_maybe_execute_pid_monitor(_Config) ->
 -spec put_pdict(atom(), any()) -> {get_pdict, pid(), any()}.
 put_pdict(Key, Value) ->
     put(Key, Value),
+    get_pdict(Key).
+
+get_pdict(Key) ->
     receive {From, get_pdict, Key} -> From ! {get_pdict, self(), get(Key)} end.
+
+get_pdict() ->
+    Vals = [{K, V} || {{cxy_ctl, K}, V} <- get()],
+    receive {From, get_pdict} -> From ! {get_pdict, self(), Vals} after 300 -> pdict_timeout end.
+
+
+-spec fetch_ages() -> proplists:proplist().
+fetch_ages() -> get_pdict().
+
+-spec check_copying_dict(config()) -> ok.
+check_copying_dict(_Config) ->
+    {Inline_Type, Spawn_Type} = {pd_inline, pd_spawn},
+    Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
+    ok = ?TM:init(Limits),
+    
+    %% Init the current process dictionary...
+    put({cxy_ctl, ann}, 13),
+    put({cxy_ctl, joe},  5),
+    put({cxy_ctl, sam},  7),
+
+    try
+        Self = self(),
+        Pid1 = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], all_keys),
+        Pid1 ! {Self, get_pdict},
+        ok = receive {get_pdict, Pid1, [{ann,13},{joe, 5},{sam, 7}]} -> ok; Any1 -> {any, Any1}
+             after 300 -> test_timeout
+             end,
+
+        Pid2 = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
+        Pid2 ! {Self, get_pdict},
+        ok = receive {get_pdict, Pid2, [{sam, 7},{joe, 5}]} -> ok; Any2 -> {any, Any2}
+             after 300 -> test_timeout
+             end,
+
+        Joe = ?TM:make_process_dictionary_default_value({cxy_ctl, joe}, 8),
+        Sue = ?TM:make_process_dictionary_default_value({cxy_ctl, sue}, 4),
+        Pid3 = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [Joe, Sue]),
+        Pid3 ! {Self, get_pdict},
+        ok = receive {get_pdict, Pid3, [{sue, 4},{joe, 5}]} -> ok; Any3 -> {any, Any3}
+             after 300 -> test_timeout
+             end
+        
+    after [13, 5, 7] = [erase(K) || K <- [{cxy_ctl, ann}, {cxy_ctl, joe}, {cxy_ctl, sam}]]
+    end,
+
+    ok.
+
