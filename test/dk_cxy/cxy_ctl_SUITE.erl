@@ -15,7 +15,7 @@
         ]).
 
 %% Spawned functions
--export([put_pdict/2, fetch_ages/0]).
+-export([put_pdict/2, fetch_ages/0, fetch_ets_ages/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -341,12 +341,19 @@ get_pdict(Key) ->
     receive {From, get_pdict, Key} -> From ! {get_pdict, self(), get(Key)} end.
 
 get_pdict() ->
-    Vals = [{K, V} || {{cxy_ctl, K}, V} <- get()],
+    Vals = filter_pdict(),
     receive {From, get_pdict} -> From ! {get_pdict, self(), Vals} after 300 -> pdict_timeout end.
 
+filter_pdict() -> [{K, V} || {{cxy_ctl, K}, V} <- get()].
 
 -spec fetch_ages() -> proplists:proplist().
 fetch_ages() -> get_pdict().
+
+-spec fetch_ets_ages(any()) -> proplists:proplist().
+fetch_ets_ages(Ets_Table) ->
+    Vals = [{K, V} || {{cxy_ctl, K}, V} <- get()],
+    ets:insert(Ets_Table, {results, Vals}),
+    ok.
 
 -spec check_copying_dict(config()) -> ok.
 check_copying_dict(_Config) ->
@@ -358,29 +365,83 @@ check_copying_dict(_Config) ->
     put({cxy_ctl, ann}, 13),
     put({cxy_ctl, joe},  5),
     put({cxy_ctl, sam},  7),
+    Stable_Pre_Call_Dict = filter_pdict(),
 
     try
         Self = self(),
-        Pid1 = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], all_keys),
-        Pid1 ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid1, [{ann,13},{joe, 5},{sam, 7}]} -> ok; Any1 -> {any, Any1}
-             after 300 -> test_timeout
-             end,
+        Ets_Table = ets:new(execute_task, [public, named_table]),
+        Joe = ?TM:make_process_dictionary_default_value({cxy_ctl, joe}, 8),
+        Sue = ?TM:make_process_dictionary_default_value({cxy_ctl, sue}, 4),
 
-        Pid2 = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
-        Pid2 ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid2, [{sam, 7},{joe, 5}]} -> ok; Any2 -> {any, Any2}
+        ok = ?TM:execute_task(Spawn_Type, ?MODULE, fetch_ets_ages, [Ets_Table], all_keys),
+        erlang:yield(),
+        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        ok = ?TM:execute_task(Spawn_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
+        erlang:yield(),
+        [{results, [{sam, 7},{joe, 5}]}] = ets:tab2list(Ets_Table),
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        ok = ?TM:execute_task(Spawn_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [Joe, Sue]),
+        erlang:yield(),
+        [{results, [{sue, 4},{joe, 5}]}] = ets:tab2list(Ets_Table),
+        Stable_Pre_Call_Dict = filter_pdict(),
+        
+
+        Pid1b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], all_keys),
+        Pid1b ! {Self, get_pdict},
+        ok = receive {get_pdict, Pid1b, [{ann,13},{joe, 5},{sam, 7}]} -> ok; Any1b -> {any, Any1b}
              after 300 -> test_timeout
              end,
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        Pid2b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
+        Pid2b ! {Self, get_pdict},
+        ok = receive {get_pdict, Pid2b, [{sam, 7},{joe, 5}]} -> ok; Any2b -> {any, Any2b}
+             after 300 -> test_timeout
+             end,
+        Stable_Pre_Call_Dict = filter_pdict(),
 
         Joe = ?TM:make_process_dictionary_default_value({cxy_ctl, joe}, 8),
         Sue = ?TM:make_process_dictionary_default_value({cxy_ctl, sue}, 4),
-        Pid3 = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [Joe, Sue]),
-        Pid3 ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid3, [{sue, 4},{joe, 5}]} -> ok; Any3 -> {any, Any3}
+        Pid3b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [Joe, Sue]),
+        Pid3b ! {Self, get_pdict},
+        ok = receive {get_pdict, Pid3b, [{sue, 4},{joe, 5}]} -> ok; Any3b -> {any, Any3b}
              after 300 -> test_timeout
-             end
-        
+             end,
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        %% Inlines mess up the local dictionary, so do them last...
+        ok = ?TM:execute_task(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], all_keys),
+        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        {inline, ok} = ?TM:execute_pid_link(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], all_keys),
+        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        ok = ?TM:execute_task(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
+        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        {inline, ok} = ?TM:execute_pid_link(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
+        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        Stable_Pre_Call_Dict = filter_pdict(),
+
+        ok = ?TM:execute_task(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [Joe, Sue]),
+        [{results, [{ann,13},{sue,4},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{sue,4}] = filter_pdict() -- Stable_Pre_Call_Dict,
+
+        erase({cxy_ctl, sue}),
+
+        Stable_Pre_Call_Dict = filter_pdict(),
+        {inline, ok} = ?TM:execute_pid_link(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [Joe, Sue]),
+        [{results, [{ann,13},{sue,4},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{sue,4}] = filter_pdict() -- Stable_Pre_Call_Dict,
+
+        true = ets:delete(Ets_Table)
+
     after [13, 5, 7] = [erase(K) || K <- [{cxy_ctl, ann}, {cxy_ctl, joe}, {cxy_ctl, sam}]]
     end,
 

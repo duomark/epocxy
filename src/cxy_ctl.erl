@@ -202,7 +202,8 @@ internal_execute_task(Task_Type, Mod, Fun, Args, Over_Limit_Action, Dict_Props) 
             case Over_Limit_Action of
                 refuse -> decr_active_procs(Task_Type),
                           {max_pids, Max};
-                inline -> _ = execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline, []),
+                inline -> _ = setup_local_process_dictionary(Dict_Props),
+                          _ = execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline, []),
                           ok
             end
     end.
@@ -289,10 +290,16 @@ internal_execute_pid(Task_Type, Mod, Fun, Args, Spawn_Type, Over_Limit_Action, D
             case Over_Limit_Action of
                 refuse -> decr_active_procs(Task_Type),
                           {max_pids, Max};
-                inline -> {inline, execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline, [])}
+                inline -> _ = setup_local_process_dictionary(Dict_Props),
+                          {inline, execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, inline, [])}
             end
     end.
 
+setup_local_process_dictionary(none)     -> skip;
+setup_local_process_dictionary(all_keys) -> skip;
+setup_local_process_dictionary(Dict_Props) ->
+    Dict = get(),
+    [put(K, V) || {?VALID_DICT_VALUE_MARKER, {K,V}} <- Dict_Props, proplists:get_value(K, Dict) =:= undefined].
 
 -spec get_calling_dictionary_values(none | all_keys | dict_props()) -> dict_prop_vals().
 
