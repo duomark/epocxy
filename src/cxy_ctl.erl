@@ -16,6 +16,7 @@
 %% External interface
 -export([
          init/1,
+         add_task_types/1, remove_task_types/1,
          execute_task/4, maybe_execute_task/4,
          execute_task/5, maybe_execute_task/5,
          execute_pid_link/4, execute_pid_monitor/4, 
@@ -105,16 +106,22 @@ update_inline_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
 %%   timestamps to record in a circular buffer for later analysis.
 %% @end
 
--spec init([{Task_Type, Type_Max, Timer_History_Count}]) -> ok when
+-spec init([{Task_Type, Type_Max, Timer_History_Count}])
+          -> boolean() | {error, init_already_executed}
+                 | {error, {invalid_init_args, list()}} when
       Task_Type :: atom(),
       Type_Max  :: pos_integer(),
       Timer_History_Count :: non_neg_integer().
 
 init(Limits) ->
-    %% Validate Limits and construct ring buffer params for each concurrency type...
-    case lists:foldl(fun(Args, Acc) -> valid_limits(Args, Acc) end, {[], [], []}, Limits) of
-        { Buffer_Params,  Cxy_Params,     []} -> do_init(Buffer_Params, Cxy_Params);
-        {_Buffer_Params, _Cxy_Params, Errors} -> {error, {invalid_init_args, lists:reverse(Errors)}}
+    case ets:info(?MODULE, name) of
+        ?MODULE   -> {error, init_already_executed};
+        undefined ->
+            %% Validate Limits and construct ring buffer params for each concurrency type...
+            case lists:foldl(fun(Args, Acc) -> valid_limits(Args, Acc) end, {[], [], []}, Limits) of
+                { Buffer_Params,  Cxy_Params,     []} -> do_init(Buffer_Params, Cxy_Params);
+                {_Buffer_Params, _Cxy_Params, Errors} -> {error, {invalid_init_args, lists:reverse(Errors)}}
+            end
     end.
 
 valid_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors})
@@ -147,11 +154,45 @@ make_proc_params(Acc, Type, Max_Procs, Max_History) ->
     
     
 do_init(Buffer_Params, Cxy_Params) ->
-    ets_buffer:create(Buffer_Params),
     _ = ets:new(?MODULE, [named_table, ordered_set, public, {write_concurrency, true}]),
-    _ = [ets:insert_new(?MODULE, Proc_Values) || Proc_Values <- Cxy_Params],
-    ok.
+    do_insert_limits(Buffer_Params, Cxy_Params).
 
+do_insert_limits(Buffer_Params, Cxy_Params) ->
+    ets_buffer:create(Buffer_Params),
+    ets:insert_new(?MODULE, Cxy_Params).
+
+
+-spec add_task_types([{Task_Type, Type_Max, Timer_History_Count}])
+                    -> boolean() | {error, {add_duplicate_task_types, list()}} when
+      Task_Type :: atom(),
+      Type_Max  :: pos_integer(),
+      Timer_History_Count :: non_neg_integer().
+
+add_task_types(Limits) ->
+    case [Args || Args = {Task_Type, _Max_Procs, _History_Count} <- Limits,
+                  ets:lookup(?MODULE, Task_Type) =/= []] of
+        [] ->
+            %% Validate Limits and construct ring buffer params for each concurrency type...
+            case lists:foldl(fun(Args, Acc) -> valid_limits(Args, Acc) end, {[], [], []}, Limits) of
+                { Buffer_Params,  Cxy_Params,     []} -> do_insert_limits(Buffer_Params, Cxy_Params);
+                {_Buffer_Params, _Cxy_Params, Errors} -> {error, {invalid_add_args, lists:reverse(Errors)}}
+            end;
+        Dups -> {error, {add_duplicate_task_types, Dups}}
+    end.
+
+
+-spec remove_task_types(list(atom())) -> pos_integer() | {error, {missing_task_types, list(atom())}}.
+
+remove_task_types(Task_Types) ->    
+    case [Task_Type || Task_Type <- Task_Types, ets:lookup(?MODULE, Task_Type) =/= []] of
+        Task_Types  -> Deletes = [begin
+                                      {Buff1, Buff2} = make_buffer_names(Task_Type),
+                                      {ets_buffer:delete(Buff1),
+                                       ets_buffer:delete(Buff2)}
+                                  end || Task_Type <- Task_Types, ets:delete(?MODULE, Task_Type)],
+                       length(Deletes);
+        Found_Types -> {error, {missing_task_types, Task_Types -- Found_Types}}
+    end.
 
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
