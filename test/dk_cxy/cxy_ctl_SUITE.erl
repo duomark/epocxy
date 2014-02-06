@@ -11,7 +11,7 @@
          check_execute_task/1,        check_maybe_execute_task/1,
          check_execute_pid_link/1,    check_maybe_execute_pid_link/1,
          check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1,
-         check_copying_dict/1
+         check_multiple_init_calls/1, check_copying_dict/1
         ]).
 
 %% Spawned functions
@@ -29,7 +29,7 @@ all() -> [
           check_execute_task,        check_maybe_execute_task,
           check_execute_pid_link,    check_maybe_execute_pid_link,
           check_execute_pid_monitor, check_maybe_execute_pid_monitor,
-          check_copying_dict
+          check_multiple_init_calls, check_copying_dict
          ].
 
 -type config() :: proplists:proplist().
@@ -52,7 +52,7 @@ check_proc_dict_helper(_Config) ->
 -spec check_no_timer_limits(config()) -> ok.
 check_no_timer_limits(_Config) ->
     Limits = [{a, 15, 0}, {b, 35, 0}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
     2 = length(All_Entries),
     true = lists:member({a, 15, 0, 0}, All_Entries),
@@ -62,7 +62,7 @@ check_no_timer_limits(_Config) ->
 -spec check_with_timer_limits(config()) -> ok.
 check_with_timer_limits(_Config) ->
     Limits = [{a, 15, 5}, {b, 35, 0}, {c, 17, 4}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
     3 = length(All_Entries),
     true = lists:member({a, 15, 0, 5}, All_Entries),
@@ -74,7 +74,7 @@ check_with_timer_limits(_Config) ->
 check_atom_limits(_Config) ->
     Limits = [{a, unlimited, 0},   {b, unlimited, 5},
               {c, inline_only, 0}, {d, inline_only, 7}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
     4 = length(All_Entries),
     true = lists:member({a, -1, 0, 0}, All_Entries),
@@ -94,7 +94,7 @@ check_limit_errors(_Config) ->
 -spec check_concurrency_types(config()) -> ok.
 check_concurrency_types(_Config) ->
     Limits = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     Types = ?TM:concurrency_types(),
     [[a, -1, 0, 0], [b, 17, 0, 5], [c, 8, 0, 0], [d, 0, 0, 7]]
         = [[proplists:get_value(P, This_Type_Props)
@@ -107,7 +107,7 @@ check_concurrency_types(_Config) ->
 check_execute_task(_Config) ->
     {Inline_Type, Spawn_Type} = {ets_inline, ets_spawn},
     Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     Ets_Table = ets:new(check_execute_task, [public, named_table]),
 
     try
@@ -136,7 +136,7 @@ check_execute_task(_Config) ->
 check_maybe_execute_task(_Config) ->
     {Overmax_Type, Spawn_Type} = {ets_overmax, ets_spawn},
     Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     Ets_Table = ets:new(check_maybe_execute_task, [public, named_table]),
 
     try
@@ -174,7 +174,7 @@ check_maybe_execute_task(_Config) ->
 check_execute_pid_link(_Config) ->
     {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
     Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
@@ -211,7 +211,7 @@ check_execute_pid_link(_Config) ->
 check_maybe_execute_pid_link(_Config) ->
     {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
     Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
@@ -257,7 +257,7 @@ check_maybe_execute_pid_link(_Config) ->
 check_execute_pid_monitor(_Config) ->
     {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
     Limits = [{Inline_Type, 0, 0}, {Spawn_Type, 3, 5}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
@@ -292,7 +292,7 @@ check_execute_pid_monitor(_Config) ->
 check_maybe_execute_pid_monitor(_Config) ->
     {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
     Limits = [{Overmax_Type, 0, 0}, {Spawn_Type, 3, 5}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
@@ -332,6 +332,28 @@ check_maybe_execute_pid_monitor(_Config) ->
 
     ok.
 
+-spec check_multiple_init_calls(config()) -> ok.
+check_multiple_init_calls(_Config) ->
+    Limits1 = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
+    true = ?TM:init(Limits1),
+    {error, init_already_executed} = ?TM:init(Limits1),
+    {error, init_already_executed} = ?TM:init([]),
+
+    Dup1 = {b, 217, 15},
+    Dup2 = {d, inline_only, 17},
+    Limits2 = [{f, unlimited, 0}, Dup1, {e, 18, 10}, Dup2],
+    {error, {add_duplicate_task_types, [Dup1, Dup2]}} = ?TM:add_task_types(Limits2),
+
+    Error_Dups = [T || {T, _, _} <- Limits2 -- [Dup1, Dup2]],
+    {error, {missing_task_types, Error_Dups}} = ?TM:remove_task_types([T || {T, _, _} <- Limits2]),
+    2 = ?TM:remove_task_types([element(1,Dup1), element(1,Dup2)]),
+    Missing_Task_Types = [T || {T, _, _} <- Limits2],
+    {error, {missing_task_types, Missing_Task_Types}} = ?TM:remove_task_types([T || {T, _, _} <- Limits2]),
+    true = ?TM:add_task_types(Limits2),
+    {error, {add_duplicate_task_types, Limits1}} = ?TM:add_task_types(Limits1),
+
+    ok.
+
 -spec put_pdict(atom(), any()) -> {get_pdict, pid(), any()}.
 put_pdict(Key, Value) ->
     put(Key, Value),
@@ -359,7 +381,7 @@ fetch_ets_ages(Ets_Table) ->
 check_copying_dict(_Config) ->
     {Inline_Type, Spawn_Type} = {pd_inline, pd_spawn},
     Limits = [{Inline_Type, 0, 2}, {Spawn_Type, 3, 5}],
-    ok = ?TM:init(Limits),
+    true = ?TM:init(Limits),
     
     %% Init the current process dictionary...
     put({cxy_ctl, ann}, 13),
