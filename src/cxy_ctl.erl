@@ -16,7 +16,7 @@
 %% External interface
 -export([
          init/1,
-         add_task_types/1, remove_task_types/1,
+         add_task_types/1, remove_task_types/1, adjust_task_limits/1,
          execute_task/4, maybe_execute_task/4,
          execute_task/5, maybe_execute_task/5,
          execute_pid_link/4, execute_pid_monitor/4, 
@@ -64,13 +64,24 @@ make_process_dictionary_default_value(Key, Value) ->
 
 make_proc_values(Task_Type, Max_Procs_Allowed, Max_History) ->
     Active_Procs = 0,
-    Stored_Max_Procs_Value = case Max_Procs_Allowed of
-                                 unlimited   -> -1;
-                                 inline_only ->  0;
-                                 _ -> Max_Procs_Allowed
-                             end,
+    Stored_Max_Procs_Value = max_procs_to_int(Max_Procs_Allowed),
     {Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History}.
 
+max_procs_to_int(unlimited)   -> -1;
+max_procs_to_int(inline_only) ->  0;
+max_procs_to_int(Max_Procs)   -> Max_Procs.
+
+int_to_max_procs(-1)  -> unlimited;
+int_to_max_procs( 0)  -> inline_only;
+int_to_max_procs(Max) -> Max.
+
+is_valid_limit(Max_Procs)
+  when is_integer(Max_Procs),
+       Max_Procs > 0        -> true;
+is_valid_limit(unlimited)   -> true;
+is_valid_limit(inline_only) -> true;
+is_valid_limit(_)           -> false.
+    
 incr_active_procs(Task_Type) ->
     ets:update_counter(?MODULE, Task_Type, {?ACTIVE_PROCS_POS, 1}).
 
@@ -104,13 +115,22 @@ update_inline_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
 %%   Limits argument is a list of task types, the corresponding maximum
 %%   number of simultaneous processes to allow, and a maximum number of
 %%   timestamps to record in a circular buffer for later analysis.
+%%
+%%   Note: this function must be called by a long-lived process, probably a
+%%   supervisor, because it will be the owner of the cxy_ctl ets table. If
+%%   the owning process (i.e., the caller of cxy_ctl:init/1) ever terminates,
+%%   all subsequent attempts to use cxy_ctl to spawn tasks will crash with a
+%%   badarg because the ets table holding the limits will be gone.
 %% @end
+
+-type task_type() :: atom().
+-type cxy_limit() :: pos_integer() | unlimited | inline_only.
 
 -spec init([{Task_Type, Type_Max, Timer_History_Count}])
           -> boolean() | {error, init_already_executed}
                  | {error, {invalid_init_args, list()}} when
-      Task_Type :: atom(),
-      Type_Max  :: pos_integer(),
+      Task_Type :: task_type(),
+      Type_Max  :: cxy_limit(),
       Timer_History_Count :: non_neg_integer().
 
 init(Limits) ->
@@ -124,14 +144,12 @@ init(Limits) ->
             end
     end.
 
-valid_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors})
-  when is_atom(Type), is_integer(History_Count), History_Count >= 0,
-       (Max_Procs =:= unlimited orelse Max_Procs =:= inline_only) ->
-    make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors});
-valid_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors})
-  when is_atom(Type), is_integer(Max_Procs), is_integer(History_Count),
-       Max_Procs >= 0, History_Count >= 0 ->
-    make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors});
+valid_limits({Type, Max_Procs, History_Count} = Limit, {Buffer_Params, Cxy_Params, Errors})
+  when is_atom(Type), is_integer(History_Count), History_Count >= 0 ->
+    case is_valid_limit(Max_Procs) of
+        true  -> make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors});
+        false -> {Buffer_Params, Cxy_Params, [Limit | Errors]}
+    end;
 valid_limits(Invalid, {Buffer_Params, Cxy_Params, Errors}) ->
     {Buffer_Params, Cxy_Params, [Invalid | Errors]}.
 
@@ -140,9 +158,9 @@ make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors
      make_proc_params(Cxy_Params, Type, Max_Procs, History_Count), Errors}.
     
 
-make_buffer_spawn(Type)  -> list_to_atom("spawn_"  ++ atom_to_list(Type)).
+make_buffer_spawn (Type) -> list_to_atom("spawn_"  ++ atom_to_list(Type)).
 make_buffer_inline(Type) -> list_to_atom("inline_" ++ atom_to_list(Type)).
-make_buffer_names(Type) -> {make_buffer_spawn(Type), make_buffer_inline(Type)}.
+make_buffer_names (Type) -> {make_buffer_spawn(Type), make_buffer_inline(Type)}.
 
 make_buffer_params(Acc, _Type, 0) -> Acc;
 make_buffer_params(Acc,  Type, Max_History) ->
@@ -164,8 +182,8 @@ do_insert_limits(Buffer_Params, Cxy_Params) ->
 
 -spec add_task_types([{Task_Type, Type_Max, Timer_History_Count}])
                     -> boolean() | {error, {add_duplicate_task_types, list()}} when
-      Task_Type :: atom(),
-      Type_Max  :: pos_integer(),
+      Task_Type :: task_type(),
+      Type_Max  :: cxy_limit(),
       Timer_History_Count :: non_neg_integer().
 
 add_task_types(Limits) ->
@@ -181,7 +199,8 @@ add_task_types(Limits) ->
     end.
 
 
--spec remove_task_types(list(atom())) -> pos_integer() | {error, {missing_task_types, list(atom())}}.
+-spec remove_task_types([task_type()])
+                       -> pos_integer() | {error, {missing_task_types, [task_type()]}}.
 
 remove_task_types(Task_Types) ->    
     case [Task_Type || Task_Type <- Task_Types, ets:lookup(?MODULE, Task_Type) =/= []] of
@@ -193,6 +212,25 @@ remove_task_types(Task_Types) ->
                        length(Deletes);
         Found_Types -> {error, {missing_task_types, Task_Types -- Found_Types}}
     end.
+
+
+-spec adjust_task_limits([{task_type(), cxy_limit()}])
+                        -> pos_integer() | {error, {missing_task_types, [task_type()]}}.
+
+adjust_task_limits(Task_Limits) ->
+    case [TTL || TTL = {Task_Type, _} <- Task_Limits, ets:lookup(?MODULE, Task_Type) =/= []] of
+        Task_Limits -> case [{Task_Type, Limit} || {Task_Type, Limit} <- Task_Limits, is_valid_limit(Limit)] of
+                           Task_Limits  ->
+                               Changes = [TL || TL = {Task_Type, New_Limit} <- Task_Limits,
+                                                ets:update_element(?MODULE, Task_Type,
+                                                                   {?MAX_PROCS_POS, max_procs_to_int(New_Limit)})],
+                               length(Changes);
+                           Legal_Limits ->
+                               {error, {invalid_task_limits, Task_Limits -- Legal_Limits}}
+                       end;
+        Found_Tasks -> {error, {missing_task_types, Task_Limits -- Found_Tasks}}
+    end.
+
 
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
@@ -411,7 +449,8 @@ fail_wrapper(inline, Call_Data, Stacktrace) -> exit       ({inline_failure, [Cal
 -spec concurrency_types() -> [proplists:proplist()].
 
 concurrency_types() ->
-    [[{task_type, Task_Type}, {max_procs, Max_Procs_Allowed}, {active_procs, Active_Procs}, {max_history, Max_History}]
+    [[{task_type, Task_Type}, {max_procs, int_to_max_procs(Max_Procs_Allowed)},
+      {active_procs, Active_Procs}, {max_history, Max_History}]
      || {Task_Type, Max_Procs_Allowed, Active_Procs, Max_History} <- ets:tab2list(?MODULE)].
 
 
