@@ -1,0 +1,66 @@
+# 2014-Feb-20  Release 0.9.7
+——
+
+## FEATURE CHANGES
+
+Renamed library to epocxy (Erlang Patterns of Concurrency)
+
+### Documentation
+
+- Added RELEASES file
+
+### ets_buffer
+- Return num_entries when writing to FIFO or RING
+- Record high-water mark for FIFO or RING
+- Add timestamps to all buffer entries
+
+### cxy_ctl
+- Make concurrency_types return atoms 'unlimited' and 'inline_only'
+- Add adjust_task_limits to change concurrency cap by task_type
+- Allow addition and removal of task_types after init
+- Add stacktrace logging to spawn failures
+- Remove ets_table_failure
+- Add option to copy process dictionary entries to new process
+
+## BUG FIXES
+
+### ets_buffer
+- Fix incorrect counts for RING buffer num_entries
+
+## DEPENDENCIES
+
+### erlang.mk
+- Upgrade to version 0.1.0 of extend/erlang.mk
+
+
+# 2013-Nov-07  Release 0.9.6
+——
+
+## FEATURE CHANGES
+
+### cxy_cache
+- New module for generational caching with 2 ets tables
+  
+### cxy_ctl
+- Add option to monitor or link spawned processes
+
+## BUG FIXES
+
+### cxy_ctl
+- Decrement active task count when max_active is tripped
+
+
+# 2013-Oct-01  Release 0.9.5
+——
+
+
+# 2013-Sep-01  Release 0.9.4
+——
+
+
+# 2013-Aug-05  Release 0.9.3
+——
+
+
+# 2013-Aug-01  Release 0.9.2
+——
