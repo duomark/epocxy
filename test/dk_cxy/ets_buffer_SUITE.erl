@@ -40,7 +40,7 @@ end_per_suite(Config)  -> Config.
 
 %% Test Modules is ?TM
 -define(TM, ets_buffer).
--define(ATTRS, [name, size, type, reserve_loc, write_loc, read_loc]).
+-define(ATTRS, [name, size, high_water, type, reserve_loc, write_loc, read_loc]).
 
 -spec check_shared_error(proplists:proplist()) -> ok.
 check_shared_error(_Config) ->
@@ -51,13 +51,28 @@ check_shared_error(_Config) ->
     [] = ?TM:list(Tab2),
 
     ?TM = ?TM:create(Tab1, ring, 20),
-    [[Tab1, 20, ring, 0, 0, 0]] = [[proplists:get_value(P, Props) || P <- ?ATTRS]
-                                   || Props <- ?TM:list()],
-    true = ?TM:write(Tab1, 15),
+    [[Tab1, 20, 0, ring, 0, 0, 0]] = [[proplists:get_value(P, Props) || P <- ?ATTRS]
+                                      || Props <- ?TM:list()],
+    1 = ?TM:write(Tab1, 15),
     [15] = ?TM:history(Tab1),
     [15] = ?TM:history(Tab1, 5),
+    [{Now1, 15}] = ?TM:history_timestamped(Tab1),
+    [{Now1, 15}] = ?TM:history_timestamped(Tab1, 5),
+
     [15] = ?TM:read(Tab1),
     [  ] = ?TM:read_all(Tab1),
+       0 = ?TM:num_entries(Tab1),
+      20 = ?TM:capacity(Tab1),
+
+    1 = ?TM:write(Tab1, 15),
+    [{_Now2, 15}] = ?TM:read_timestamped(Tab1),
+    [  ] = ?TM:read_all_timestamped(Tab1),
+       0 = ?TM:num_entries(Tab1),
+      20 = ?TM:capacity(Tab1),
+
+    1 = ?TM:write(Tab1, 35),
+    2 = ?TM:write(Tab1, 45),
+    [{_Now3, 35}, {_Now4, 45}] = ?TM:read_all_timestamped(Tab1),
        0 = ?TM:num_entries(Tab1),
       20 = ?TM:capacity(Tab1),
 
@@ -85,12 +100,33 @@ check_dedicated_error(_Config) ->
 
     Tab1 = ?TM:create_dedicated(Tab1, ring, 20),
     Props = ?TM:list_dedicated(Tab1),
-    [Tab1, 20, ring, 0, 0, 0] = [proplists:get_value(P, Props) || P <- ?ATTRS],
-    true = ?TM:write_dedicated(Tab1, 15),
+    [Tab1, 20, 0, ring, 0, 0, 0] = [proplists:get_value(P, Props) || P <- ?ATTRS],
+    1 = ?TM:write_dedicated(Tab1, 15),
     [15] = ?TM:history_dedicated(Tab1),
     [15] = ?TM:history_dedicated(Tab1, 5),
+    [{Now1, 15}] = ?TM:history_timestamped_dedicated(Tab1),
+    [{Now1, 15}] = ?TM:history_timestamped_dedicated(Tab1, 5),
+
     [15] = ?TM:read_dedicated(Tab1),
     [  ] = ?TM:read_all_dedicated(Tab1),
+       0 = ?TM:num_entries_dedicated(Tab1),
+      20 = ?TM:capacity_dedicated(Tab1),
+
+    1 = ?TM:write_dedicated(Tab1, 15),
+    [{_Now2, 15}] = ?TM:read_timestamped_dedicated(Tab1),
+    [  ] = ?TM:read_all_timestamped_dedicated(Tab1),
+       0 = ?TM:num_entries_dedicated(Tab1),
+      20 = ?TM:capacity_dedicated(Tab1),
+
+    1 = ?TM:write_dedicated(Tab1, 35),
+    2 = ?TM:write_dedicated(Tab1, 45),
+    [35, 45] = ?TM:read_all_dedicated(Tab1),
+       0 = ?TM:num_entries_dedicated(Tab1),
+      20 = ?TM:capacity_dedicated(Tab1),
+
+    1 = ?TM:write_dedicated(Tab1, 37),
+    2 = ?TM:write_dedicated(Tab1, 47),
+    [{_Now3, 37}, {_Now4, 47}] = ?TM:read_all_timestamped_dedicated(Tab1),
        0 = ?TM:num_entries_dedicated(Tab1),
       20 = ?TM:capacity_dedicated(Tab1),
 
@@ -117,18 +153,18 @@ check_shared_create(_Config) ->
     undefined = ets:info(?TM, name),
     ?TM = ?TM:create(Tab1, ring, 20),
     ?TM = ets:info(?TM, name),
-    [[Tab1, 20, ring, 0, 0, 0]]
+    [[Tab1, 20, 0, ring, 0, 0, 0]]
         = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
     ?TM = ?TM:create(Tab2, fifo),
-    [[Tab2, 0, fifo, 0, 0, 0], [Tab1, 20, ring, 0, 0, 0]]
+    [[Tab2, 0, 0, fifo, 0, 0, 0], [Tab1, 20, 0, ring, 0, 0, 0]]
         = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
     
     Props1 = ?TM:list(Tab1),
-    [Tab1, 20, ring, 0, 0, 0] = [proplists:get_value(P, Props1) || P <- ?ATTRS],
+    [Tab1, 20, 0, ring, 0, 0, 0] = [proplists:get_value(P, Props1) || P <- ?ATTRS],
     Props2 = ?TM:list(Tab2),
-    [Tab2,  0, fifo, 0, 0, 0] = [proplists:get_value(P, Props2) || P <- ?ATTRS],
+    [Tab2,  0, 0, fifo, 0, 0, 0] = [proplists:get_value(P, Props2) || P <- ?ATTRS],
 
     true = ?TM:delete(Tab1),
     true = ?TM:delete(Tab2),
@@ -146,11 +182,11 @@ check_dedicated_create(_Config) ->
     undefined = ets:info(?TM, name),
     Tab1 = ets:info(Tab1, name),
     Props1 = ?TM:list_dedicated(Tab1),
-    [Tab1, 20, ring, 0, 0, 0]
+    [Tab1, 20, 0, ring, 0, 0, 0]
         = [proplists:get_value(P, Props1) || P <- ?ATTRS],
     Tab2 = ?TM:create_dedicated(Tab2, fifo),
     Props2 = ?TM:list_dedicated(Tab2),
-    [Tab2, 0, fifo, 0, 0, 0]
+    [Tab2, 0, 0, fifo, 0, 0, 0]
         = [proplists:get_value(P, Props2) || P <- ?ATTRS],
 
     true = ?TM:delete_dedicated(Tab1),
@@ -169,7 +205,7 @@ check_shared_history(_Config) ->
             {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
             {Tab3, {purple, 5}},     {Tab3, {hybrid, 7}}
            ],
-    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [1,2, 1,2,3, true,true],
     Exp1 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
     [?TM, 10] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% 3 meta + 7 data
 
@@ -181,7 +217,7 @@ check_shared_history(_Config) ->
              {Tab1, {green,  3}}, {Tab1, {orange, 8}},
              {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
              ],
-    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [3,4, true,true],
     Exp2 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
     [?TM, 14] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% 3 meta + 11 data
 
@@ -218,7 +254,7 @@ check_dedicated_history(_Config) ->
             {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
             {Tab3, {purple, 5}},     {Tab3, {hybrid, 7}}
            ],
-    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [1,2, 1,2,3, true,true],
     Exp1 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
 
     [{red, 2},        {golden, 1}               ] = ?TM:history_dedicated(Tab1),
@@ -229,7 +265,7 @@ check_dedicated_history(_Config) ->
              {Tab1, {green,  3}}, {Tab1, {orange, 8}},
              {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
              ],
-    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [3,4, true,true],
     Exp2 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
 
     [{red, 2},        {golden, 1},   {green, 3},  {orange, 8}] = ?TM:history_dedicated(Tab1),
@@ -259,21 +295,31 @@ check_shared_clear(_Config) ->
         = [ets:info(Tab, name) || Tab <- [?TM] ++ [element(1,Spec) || Spec <- Tab_Specs]],
 
     %% Entries are sorted by table name.
-    [[Tab2, Size2, Type2, 0, 0, 0], [Tab1, 0, Type1, 0, 0, 0], [Tab3, 0, Type3, 0, 0, 0]]
+    [[Tab2, Size2, 0, Type2, 0, 0, 0], [Tab1, 0, 0, Type1, 0, 0, 0], [Tab3, 0, 0, Type3, 0, 0, 0]]
         = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
 
     Data = [{Tab1, {red, 2}}, {Tab1, {golden, 1}}, {Tab2, {macintosh, 34}}, {Tab3, {purple, 5}}],
-    [true, true, true, true] = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data],
+    [1,2, 1, true] = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data],
     [?TM, 7] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% 3 meta + 4 data
 
     %% Entries are sorted by table name.
-    [[Tab2, Size2, Type2, 1, 1, 0], [Tab1, 0, Type1, 2, 2, 0], [Tab3, 0, Type3, -1, -1, -1]]
+    [[Tab2, Size2, 1, Type2, 1, 1, 0], [Tab1, 0, 2, Type1, 2, 2, 0], [Tab3, 0, 0, Type3, -1, -1, -1]]
         = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- ?TM:list()],
     
     [true, true, true] = [?TM:clear(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     [?TM, 3] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% 3 meta
+
+    %% High water mark remains after a clear
+    [[Tab2, Size2, 1, Type2, 0, 0, 0], [Tab1, 0, 2, Type1, 0, 0, 0], [Tab3, 0, 0, Type3, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
+           || Props <- ?TM:list()],
+    [true, true, true] = [?TM:clear_high_water(Tab) || Tab <- [Tab1, Tab2, Tab3]],
+    [[Tab2, Size2, 0, Type2, 0, 0, 0], [Tab1, 0, 0, Type1, 0, 0, 0], [Tab3, 0, 0, Type3, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
+           || Props <- ?TM:list()],
+    
     [true, true, true] = [?TM:delete(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     [?TM, 0] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% no meta
     ok.
@@ -296,22 +342,31 @@ check_dedicated_clear(_Config) ->
     [undefined, Tab1, Tab2, Tab3]
         = [ets:info(Tab, name) || Tab <- [?TM, Tab1, Tab2, Tab3]],
 
-    [[Tab1, 0, Type1, 0, 0, 0], [Tab2, Size2, Type2, 0, 0, 0], [Tab3, 0, Type3, 0, 0, 0]]
+    [[Tab1, 0, 0, Type1, 0, 0, 0], [Tab2, Size2, 0, Type2, 0, 0, 0], [Tab3, 0, 0, Type3, 0, 0, 0]]
         = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- [?TM:list_dedicated(T) || T <- [Tab1, Tab2, Tab3]]],
 
     Data = [{Tab1, {red, 2}}, {Tab1, {golden, 1}}, {Tab2, {macintosh, 34}}, {Tab3, {purple, 5}}],
-    [true, true, true, true] = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data],
+    [1,2, 1, true] = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data],
     [[undefined, undefined], [Tab1, 3], [Tab2, 2], [Tab3, 2]]
         = [[ets:info(Tab, Prop) || Prop <- [name, size]] || Tab <- [?TM, Tab1, Tab2, Tab3]],
 
-    [[Tab1, 0, Type1, 2, 2, 0], [Tab2, Size2, Type2, 1, 1, 0], [Tab3, 0, Type3, -1, -1, -1]]
+    [[Tab1, 0, 2, Type1, 2, 2, 0], [Tab2, Size2, 1, Type2, 1, 1, 0], [Tab3, 0, 0, Type3, -1, -1, -1]]
         = [[proplists:get_value(P, Props) || P <- ?ATTRS]
            || Props <- [?TM:list_dedicated(T) || T <- [Tab1, Tab2, Tab3]]],
     
     [true, true, true] = [?TM:clear_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     [[undefined, undefined], [Tab1, 1], [Tab2, 1], [Tab3, 1]]
         = [[ets:info(Tab, Prop) || Prop <- [name, size]] || Tab <- [?TM, Tab1, Tab2, Tab3]],
+
+    %% High water mark remains after a clear
+    [[Tab1, 0, 2, Type1, 0, 0, 0], [Tab2, Size2, 1, Type2, 0, 0, 0], [Tab3, 0, 0, Type3, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
+           || Props <- [?TM:list_dedicated(T) || T <- [Tab1, Tab2, Tab3]]],
+    [true, true, true] = [?TM:clear_high_water_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
+    [[Tab1, 0, 0, Type1, 0, 0, 0], [Tab2, Size2, 0, Type2, 0, 0, 0], [Tab3, 0, 0, Type3, 0, 0, 0]]
+        = [[proplists:get_value(P, Props) || P <- ?ATTRS]
+           || Props <- [?TM:list_dedicated(T) || T <- [Tab1, Tab2, Tab3]]],
 
     [true, true, true] = [?TM:delete_dedicated(Tab) || Tab <- [Tab1, Tab2, Tab3]],
     [undefined, undefined, undefined, undefined] = [ets:info(Tab, name) || Tab <- [?TM, Tab1, Tab2, Tab3]],
@@ -327,7 +382,7 @@ check_shared_read(_Config) ->
              {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
              {Tab3, {purple,     5}}, {Tab3, {hybrid,   7}}
            ],
-    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [1, 1,2,3, true,true],
     Exp1 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
     [?TM, 9] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% 3 meta + 6 data
 
@@ -338,10 +393,10 @@ check_shared_read(_Config) ->
     [{hybrid,     7}] = ?TM:read(Tab3),
 
     Data2 = [
-             {Tab1, {golden,   1}}, {Tab1, {green,  3}}, {Tab1, {orange, 8}},
-             {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
+             {Tab1, {golden,  1}}, {Tab1, {green,  3}}, {Tab1, {orange, 8}},
+             {Tab3, {bumpy,  11}}, {Tab3, {smooth, 4}}
             ],
-    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [1,2,3, true,true],
     Exp2 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
     [?TM, 12] = [ets:info(?TM, Prop) || Prop <- [name, size]],  %% 3 meta + 9 remaining data
 
@@ -375,7 +430,7 @@ check_dedicated_read(_Config) ->
              {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
              {Tab3, {purple,     5}}, {Tab3, {hybrid,   7}}
            ],
-    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [1,2, 1,2,3, true,true],
     Exp1 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
 
     not_supported = ?TM:read_dedicated(Tab3, 5),
@@ -388,7 +443,7 @@ check_dedicated_read(_Config) ->
               {Tab1, {green,  3}}, {Tab1, {orange, 8}},
               {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
             ],
-    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [2,3, true,true],
     Exp2 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
 
     [{golden,   1}, {green,  3}] = ?TM:read_dedicated(Tab1, 2),
@@ -536,14 +591,17 @@ check_shared_ring_edges(_Config) ->
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 3),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 8),
+    2 = ?TM:num_entries(Tab1),
     [{red, 2}] = ?TM:read(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 3),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 8),
+    1 = ?TM:num_entries(Tab1),
     [{granny, 5}] = ?TM:read(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 3),
     [{red, 2}, {granny, 5}] = ?TM:history(Tab1, 8),
+    0 = ?TM:num_entries(Tab1),
 
     [{winesap, 3}] = ?TM:history(Tab2),
     [{winesap, 3}] = ?TM:history(Tab2, 3),
@@ -653,7 +711,7 @@ check_shared_read_all(_Config) ->
              {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
              {Tab3, {purple,     5}}, {Tab3, {hybrid,   7}}
            ],
-    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [1, 1,2,3, true,true],
     Exp1 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
 
     [1, 3, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
@@ -663,10 +721,10 @@ check_shared_read_all(_Config) ->
     [0, 0, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
 
     Data2 = [
-             {Tab1, {golden,   1}}, {Tab1, {green,  3}}, {Tab1, {orange, 8}},
-             {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
+             {Tab1, {golden,  1}}, {Tab1, {green,  3}}, {Tab1, {orange, 8}},
+             {Tab3, {bumpy,  11}}, {Tab3, {smooth, 4}}
             ],
-    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [1,2,3, true,true],
     Exp2 = [?TM:write(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
 
     [3, 0, not_supported] = [?TM:num_entries(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
@@ -697,19 +755,20 @@ check_dedicated_read_all(_Config) ->
              {Tab2, {macintosh, 34}}, {Tab2, {winesap, 18}}, {Tab2, {granny, 8}},
              {Tab3, {purple,     5}}, {Tab3, {hybrid,   7}}
            ],
-    Exp1 = lists:duplicate(length(Data1), true),
+    Exp1 = [1,2, 1,2,3, true,true],
     Exp1 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data1],
 
     [2, 3, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
     [{red,        2}, {golden, 1}] = ?TM:read_all_dedicated(Tab1),
     [{macintosh, 34}, {winesap, 18}, {granny, 8}] = ?TM:read_all_dedicated(Tab2),
     not_supported = ?TM:read_all_dedicated(Tab3),
+    [0, 0, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
 
     Data2 = [
               {Tab1, {green,  3}}, {Tab1, {orange, 8}},
               {Tab3, {bumpy, 11}}, {Tab3, {smooth, 4}}
             ],
-    Exp2 = lists:duplicate(length(Data2), true),
+    Exp2 = [1,2, true,true],
     Exp2 = [?TM:write_dedicated(Buffer_Name, Buffer_Data) || {Buffer_Name, Buffer_Data} <- Data2],
 
     [2, 0, not_supported] = [?TM:num_entries_dedicated(Buffer) || Buffer <- [Tab1, Tab2, Tab3]],
