@@ -1,8 +1,8 @@
-{alias, dk_cxy, "./dk_cxy/"}.
+{alias, epocxy, "./epocxy/"}.
 {include, ["../include"]}.
-{logdir, "./dk_cxy/logs/"}.
-{cover, "./dk_cxy.coverspec"}.
-{suites, dk_cxy, [
+{logdir, "./epocxy/logs/"}.
+{cover, "./epocxy.coverspec"}.
+{suites, epocxy, [
                   ets_buffer_SUITE,
                   cxy_ctl_SUITE,
                   cxy_cache_SUITE

@@ -1,4 +1,4 @@
-PROJECT = dk_cxy
+PROJECT = epocxy
 
 CT_SUITES = ets_buffer cxy_ctl cxy_cache
 

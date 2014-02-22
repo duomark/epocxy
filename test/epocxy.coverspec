@@ -1,4 +1,4 @@
-{export, "./dk_cxy/logs/cover"}.
+{export, "./epocxy/logs/cover"}.
 {level, details}.
 {incl_dirs, ["src/"]}.
 {incl_mods, [

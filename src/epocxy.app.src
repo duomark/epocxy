@@ -2,11 +2,11 @@
 %% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
 %% ex: ts=4 sw=4 et
 
-{application, dk_cxy,
+{application, epocxy,
  [
-  {id, "dk_cxy"},
+  {id, "epocxy"},
   {vsn, "0.9.7"},
-  {description, "DuoMark concurrency tools"},
+  {description, "Erlang Patterns of Concurrency"},
   {modules,      [
                   ets_buffer,
                   cxy_ctl,
