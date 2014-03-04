@@ -596,25 +596,25 @@ write_internal(Table_Name, Buffer_Name, Data) ->
                 case buffer_type(Type_Num) of
 
                     %% FIFO continuously increments...
-                    fifo -> Write_Loc = ets:update_counter(Table_Name, Meta_Key, fifo_reserve_write_cmd()),
-                            true = insert_ets_internal(Table_Name, Buffer_Name, Write_Loc, Data),
-                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, Meta_Key, fifo_publish_write_cmd()),
-                            Num_Entries = compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc),
+                    fifo -> Reserved_Loc = ets:update_counter(Table_Name, Meta_Key, fifo_reserve_write_cmd()),
+                            true = insert_ets_internal(Table_Name, Buffer_Name, Reserved_Loc, Data),
+                            [New_Write_Loc, Read_Loc] = ets:update_counter(Table_Name, Meta_Key, fifo_publish_write_cmd()),
+                            Num_Entries = compute_num_entries(Type_Num, Max_Loc, New_Write_Loc, Read_Loc),
                             Num_Entries > High_Water_Count andalso set_high_water(Table_Name, Meta_Key, Num_Entries),
                             Num_Entries;
 
                     %% Ring buffer wraps around on inserts...
-                    ring -> [Write_Loc, Read_Loc]  = ets:update_counter(Table_Name, Meta_Key, ring_reserve_write_cmd(Max_Loc)),
-                            true = insert_ets_internal(Table_Name, Buffer_Name, Write_Loc, Data),
-                            [Write_Loc, Read_Loc] = ets:update_counter(Table_Name, Meta_Key, ring_publish_write_cmd(Max_Loc, Write_Loc, Read_Loc)),
-                            Num_Entries = compute_num_entries(Type_Num, Max_Loc, Write_Loc, Read_Loc),
+                    ring -> [Reserved_Loc, Read_Loc]  = ets:update_counter(Table_Name, Meta_Key, ring_reserve_write_cmd(Max_Loc)),
+                            true = insert_ets_internal(Table_Name, Buffer_Name, Reserved_Loc, Data),
+                            [New_Write_Loc, New_Read_Loc] = ets:update_counter(Table_Name, Meta_Key, ring_publish_write_cmd(Max_Loc, Reserved_Loc, Read_Loc)),
+                            Num_Entries = compute_num_entries(Type_Num, Max_Loc, New_Write_Loc, New_Read_Loc),
                             Num_Entries > High_Water_Count andalso set_high_water(Table_Name, Meta_Key, Num_Entries),
                             Num_Entries;
 
                     %% LIFO continuously decrements...
-                    lifo -> Write_Loc = ets:update_counter(Table_Name, Meta_Key, lifo_reserve_write_cmd()),
-                            true = insert_ets_internal(Table_Name, Buffer_Name, Write_Loc, Data),
-                            _ = ets:update_counter(Table_Name, Meta_Key, lifo_publish_write_cmd(Write_Loc)),
+                    lifo -> Reserved_Loc = ets:update_counter(Table_Name, Meta_Key, lifo_reserve_write_cmd()),
+                            true = insert_ets_internal(Table_Name, Buffer_Name, Reserved_Loc, Data),
+                            _ = ets:update_counter(Table_Name, Meta_Key, lifo_publish_write_cmd(Reserved_Loc)),
                             %% High water mark not possible with current LIFO approach
                             true
                 end
