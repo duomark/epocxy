@@ -113,7 +113,7 @@
 -type buffer_type()     :: ring | fifo | lifo.
 -type buffer_type_num() :: 1    | 2    | 3.
 
--export_type([buffer_type/0, buffer_error/0]).
+-export_type([buffer_name/0, buffer_type/0, buffer_error/0]).
 
 
 %%%------------------------------------------------------------------------------
