@@ -560,7 +560,7 @@ clear_high_water_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 %%% Internal functions
 %%%------------------------------------------------------------------------------
 
--define(READ_RETRIES, 3).
+-define(READ_RETRIES, 30).
 
 -define(READ_LOC,    {#ets_buffer.read_loc,    0}).
 -define(WRITE_LOC,   {#ets_buffer.write_loc,   0}).
