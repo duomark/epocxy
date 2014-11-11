@@ -296,7 +296,7 @@ list(Buffer_Name) when is_atom(Buffer_Name) ->
 %% @doc Initialize or add to a single ETS table with multiple named buffers.
 create(Init_Data) when is_list(Init_Data) ->
     ets:info(?MODULE, named_table) =/= undefined
-        orelse ets:new(?MODULE, [named_table, ordered_set, public, {keypos, 2}, {write_concurrency, true}]),
+        orelse ets:new(?MODULE, [named_table, ordered_set, public, {keypos, 2}]),
     _ = [ets:insert_new(?MODULE, Buffer_Meta)
          || Buffer_Attrs <- Init_Data,
             begin
@@ -453,7 +453,7 @@ list_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 %% @end
 create_dedicated(Buffer_Name, Buffer_Type)
   when is_atom(Buffer_Name), (Buffer_Type =:= fifo orelse Buffer_Type =:= lifo) ->
-    Tid = ets:new(Buffer_Name, [named_table, ordered_set, public, {keypos, 2}, {write_concurrency, true}]),
+    Tid = ets:new(Buffer_Name, [named_table, ordered_set, public, {keypos, 2}]),
     Buffer_Meta = make_buffer_meta(Buffer_Name, Buffer_Type),
     ets:insert_new(Buffer_Name, Buffer_Meta),
     Tid.
@@ -466,7 +466,7 @@ create_dedicated(Buffer_Name, Buffer_Type)
 %% @end
 create_dedicated(Buffer_Name, ring, Buffer_Size)
   when is_atom(Buffer_Name), is_integer(Buffer_Size), Buffer_Size > 0  ->
-    Tid = ets:new(Buffer_Name, [named_table, ordered_set, public, {keypos, 2}, {write_concurrency, true}]),
+    Tid = ets:new(Buffer_Name, [named_table, ordered_set, public, {keypos, 2}]),
     Buffer_Meta = make_buffer_meta(Buffer_Name, ring, Buffer_Size),
     ets:insert_new(Buffer_Name, Buffer_Meta),
     Tid.
