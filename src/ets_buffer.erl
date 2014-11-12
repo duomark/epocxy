@@ -453,7 +453,7 @@ list_dedicated(Buffer_Name) when is_atom(Buffer_Name) ->
 %% @end
 create_dedicated(Buffer_Name, Buffer_Type)
   when is_atom(Buffer_Name), (Buffer_Type =:= fifo orelse Buffer_Type =:= lifo) ->
-    Tid = ets:new(Buffer_Name, [named_table, set, public, {keypos, 2}, {write_concurrency, true}]),
+    Tid = ets:new(Buffer_Name, [named_table, ordered_set, public, {keypos, 2}]),
     Buffer_Meta = make_buffer_meta(Buffer_Name, Buffer_Type),
     ets:insert_new(Buffer_Name, Buffer_Meta),
     Tid.
