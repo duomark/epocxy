@@ -1,7 +1,7 @@
 %%%------------------------------------------------------------------------------
-%%% @copyright (c) 2013, DuoMark International, Inc.
+%%% @copyright (c) 2013-2014, DuoMark International, Inc.
 %%% @author Jay Nelson <jay@duomark.com>
-%%% @reference 2013 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference 2013-2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
@@ -117,11 +117,11 @@ start_link(Cache_Name, Cache_Mod, count, Threshold, Poll_Time)
 %% to be managed and called directly within the FSM process.
 
 init({Cache_Name}) ->
-    cxy_cache:create(Cache_Name),
+    true = cxy_cache:create(Cache_Name),
     Init_State = #ecf_state{cache_name=Cache_Name},
     init_finish(Init_State);
 init({Cache_Name, Poll_Millis}) ->
-    cxy_cache:create(Cache_Name),
+    true = cxy_cache:create(Cache_Name),
     Init_State = #ecf_state{cache_name=Cache_Name, poll_frequency=Poll_Millis},
     init_finish(Init_State).
 
@@ -143,7 +143,7 @@ code_change(_OldVsn, State_Name, State, _Extra) -> {ok, State_Name, State}.
 
 handle_info (timeout, State_Name,
              #ecf_state{cache_name=Cache_Name, poll_frequency=Poll_Millis} = State) ->
-    cxy_cache:maybe_make_new_generation(Cache_Name),
+    _ = cxy_cache:maybe_make_new_generation(Cache_Name),
     erlang:send_after(Poll_Millis, self(), timeout),
     {next_state, State_Name, State};
 

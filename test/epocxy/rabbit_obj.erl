@@ -6,7 +6,7 @@
 
 -export([create_key_value/1]).
 
--spec create_key_value(term()) -> term().
-create_key_value(Key) -> new_rabbit(Key).
+-spec create_key_value(cxy_cache:cached_key()) -> {cxy_cache:cached_vsn(), cxy_cache:cached_value()}.
+create_key_value(Key) -> {erlang:now(), new_rabbit(Key)}.
 
 new_rabbit(Name) -> {rabbit, Name}.
