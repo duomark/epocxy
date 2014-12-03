@@ -1,7 +1,7 @@
 %%%------------------------------------------------------------------------------
 %%% @copyright (c) 2013-2014, DuoMark International, Inc.
 %%% @author Jay Nelson <jay@duomark.com>
-%%% @reference 2013 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference 2013-2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
@@ -396,6 +396,7 @@ insert_to_new_gen(Cache_Name, New_Gen_Id, Mod,
             %% Check the versions and keep the cached value if it is newer...
             case determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) of
                 true  -> Cached_Value;
+
                 %% Otherwise override by re-inserting on top of the older cached value.
                 false -> true = ets:insert(New_Gen_Id, Obj),
                          Insert_Value
