@@ -6,8 +6,8 @@
 
 -export([create_key_value/1]).
 
--spec create_key_value(term()) -> term().
-create_key_value(Key) -> new_frog(Key).
+-spec create_key_value(cxy_cache:cached_key()) -> {cxy_cache:cached_vsn(), cxy_cache:cached_value()}.
+create_key_value(Key) -> {erlang:now(), new_frog(Key)}.
 
 new_frog(Name) -> {frog, Name}.
 
