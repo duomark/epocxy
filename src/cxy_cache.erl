@@ -200,7 +200,7 @@ info() ->
 info(Cache_Name)
   when is_atom(Cache_Name) ->
     case ?GET_METADATA(Cache_Name) of
-        []    -> [];
+        [] -> [];
         [#cxy_cache_meta{} = Metadata] -> fmt_info(Metadata)
     end.
 
@@ -258,7 +258,7 @@ clear(Cache_Name)
 
     %% Update the metadata if it still exists.
     case ?GET_METADATA(Cache_Name) of
-        []    -> false;
+        [] -> false;
         [#cxy_cache_meta{new_gen=New, old_gen=Old}] ->
             %% New accesses that interleave between delete_all_objects and update_element won't be counted.
             _ = [try ets:delete_all_objects(Tab) catch error:badarg -> skip end || Tab <- [New, Old]],
@@ -269,7 +269,7 @@ clear(Cache_Name)
 delete(Cache_Name)
   when is_atom(Cache_Name) ->
     case ?GET_METADATA(Cache_Name) of
-        []    -> false;
+        [] -> false;
         [#cxy_cache_meta{new_gen=New, old_gen=Old}] ->
             true = ?DO_METADATA(ets:delete(?MODULE, Cache_Name)),
             _ = [try ets:delete(Tab) catch error:badarg -> skip end || Tab <- [New, Old]],
@@ -304,7 +304,7 @@ replace_check_generation_fun(Cache_Name, Fun)
 
 delete_item(Cache_Name, Key) ->
     case ?GET_METADATA(Cache_Name) of
-        []    -> false;
+        [] -> false;
         [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id}] ->
             %% Delete from new generation first is safest during a generation change.
             _ = ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
@@ -314,7 +314,7 @@ delete_item(Cache_Name, Key) ->
 
 fetch_item(Cache_Name, Key) ->
     case ?GET_METADATA(Cache_Name) of
-        []    -> {error, {no_cache_metadata, Cache_Name}};
+        [] -> {error, {no_cache_metadata, Cache_Name}};
         [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id, cache_module=Mod}] ->
             case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
                 false ->
@@ -409,11 +409,8 @@ insert_to_new_gen(Cache_Name, New_Gen_Id, Mod,
 determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) ->
     case erlang:function_exported(Mod, is_later_version, 2) of
         false -> Insert_Vsn < Cached_Vsn;
-        true  -> try Mod:is_later_version(Insert_Vsn, Cached_Vsn) of
-                     false -> false;
-                     true  -> true
-                 %% The user-supplied function crashed, use the currently cached value.
-                 catch Class:Type ->
+        true  -> try Mod:is_later_version(Insert_Vsn, Cached_Vsn)
+                 catch Class:Type -> % The user-supplied function crashed, use the currently cached value.
                          Msg = "~p:is_later_version on cache ~p crashed: {~p:~p} ~p~n",
                          error_logger:error_msg(Msg, [Mod, Cache_Name, Class, Type,
                                                       erlang:get_stacktrace()]),
@@ -436,7 +433,7 @@ determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) ->
 %% @doc Manually cause a new generation to be created, called from new_gen owner process.
 new_generation(Cache_Name) ->
     case ?GET_METADATA(Cache_Name) of
-        []    -> {error, {no_cache_metadata, Cache_Name}};
+        [] -> {error, {no_cache_metadata, Cache_Name}};
         [#cxy_cache_meta{new_gen=New_Gen_Id, new_gen_time=New_Time, old_gen=Old_Gen_Id}] ->
             new_generation(Cache_Name, New_Gen_Id, New_Time, Old_Gen_Id)
     end.
@@ -444,7 +441,7 @@ new_generation(Cache_Name) ->
 %% @doc Create a new generation if the generation test returns true.
 maybe_make_new_generation(Cache_Name) ->
     case ?GET_METADATA(Cache_Name) of
-        []    -> {error, {no_cache_metadata, Cache_Name}};
+        [] -> {error, {no_cache_metadata, Cache_Name}};
 
         [#cxy_cache_meta{new_gen_time            = New_Time,
                          fetch_count             = Fetch_Count,
@@ -452,8 +449,8 @@ maybe_make_new_generation(Cache_Name) ->
                          new_generation_function = New_Gen_Fun} = Metadata] ->
 
             case New_Gen_Fun of
-                none  -> false;
-                time  ->
+                none -> false;
+                time ->
                     Time_Expired = timer:now_diff(os:timestamp(), New_Time) > Thresh,
                     make_generation_finish(Cache_Name, Metadata, Time_Expired);
                 count ->
