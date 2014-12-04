@@ -56,6 +56,13 @@ end_per_suite(Config)  -> Config.
           new_generation_thresh   = 0     :: non_neg_integer()
         }).
 
+-record(cxy_cache_value,
+        {
+          key      :: ?TM:cached_key(),
+          value    :: ?TM:cached_value(),
+          version  :: ?TM:cached_value_vsn()
+        }).
+
 
 cleanup(Cache_Name) ->     
     true = ?TM:delete(Cache_Name),
@@ -133,21 +140,21 @@ check_fetching(_Config) ->
     %% First time creates new value (fetch_count always indicates next access count)...
     {frog, foo} = ?TM:fetch_item(Cache_Name, foo),
     [] = ets:lookup(Old, foo),
-    [{foo, {frog, foo}}] = ets:lookup(New, foo),
+    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
     [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
     false = ?TM:maybe_make_new_generation(Cache_Name),
 
     %% Second time fetches existing value...
     {frog, foo} = ?TM:fetch_item(Cache_Name, foo),
     [] = ets:lookup(Old, foo),
-    [{foo, {frog, foo}}] = ets:lookup(New, foo),
+    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
     [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
     false = ?TM:maybe_make_new_generation(Cache_Name),
 
     %% Retrieve 3 more times still no new generation...
     [{frog, foo}, {frog, foo}, {frog, foo}] = [?TM:fetch_item(Cache_Name, foo) || _N <- lists:seq(1,3)],
     [] = ets:lookup(Old, foo),
-    [{foo, {frog, foo}}] = ets:lookup(New, foo),
+    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
     [#cxy_cache_meta{fetch_count=5}] = ets:lookup(?TM, Cache_Name),
     false = ?TM:maybe_make_new_generation(Cache_Name),
 
@@ -161,19 +168,19 @@ check_fetching(_Config) ->
     {frog, bar} = ?TM:fetch_item(Cache_Name, bar),
     1 = ets:info(New2, size),
     [] = ets:lookup(New2, foo),
-    [{bar, {frog, bar}}] = ets:lookup(New2, bar),
+    [#cxy_cache_value{key=bar, value={frog, bar}}] = ets:lookup(New2, bar),
     1 = ets:info(New, size),
-    [{foo, {frog, foo}}] = ets:lookup(New, foo),
+    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
     [] = ets:lookup(New, bar),
     [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
 
     %% Now check if migration of key 'foo' works properly...
     {frog, foo} = ?TM:fetch_item(Cache_Name, foo),
     2 = ets:info(New2, size),
-    [{foo, {frog, foo}}] = ets:lookup(New2, foo),
-    [{bar, {frog, bar}}] = ets:lookup(New2, bar),
+    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New2, foo),
+    [#cxy_cache_value{key=bar, value={frog, bar}}] = ets:lookup(New2, bar),
     1 = ets:info(New, size),
-    [{foo, {frog, foo}}] = ets:lookup(New, foo),
+    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
     [] = ets:lookup(New, bar),
     [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
 
