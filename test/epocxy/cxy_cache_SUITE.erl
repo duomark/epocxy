@@ -32,38 +32,7 @@ end_per_suite(Config)  -> Config.
 %%% Unit tests for cxy_cache core
 %%%------------------------------------------------------------------------------
                               
--type cache_name()    :: atom().
--type thresh_type()   :: count | time.
--type gen_fun()       :: none
-                       | fun((cache_name(), non_neg_integer(), erlang:timestamp()) -> boolean()).
--type check_gen_fun() :: gen_fun() | thresh_type().
-
--record(cxy_cache_meta,
-        {
-          cache_name                      :: cache_name(),
-          started        = os:timestamp() :: erlang:timestamp(),
-          gen1_hit_count = 0              :: gen1_hit_count(),
-          gen2_hit_count = 0              :: gen2_hit_count(),
-          refresh_count  = 0              :: refresh_count(),
-          fetch_count    = 0              :: fetch_count(),
-          error_count    = 0              :: error_count(),
-          miss_count     = 0              :: miss_count(),
-          new_gen_time                    :: erlang:timestamp(),
-          old_gen_time                    :: erlang:timestamp(),
-          new_gen                         :: ets:tid(),
-          old_gen                         :: ets:tid(),
-          cache_module                    :: module(),
-          new_generation_function = none  :: check_gen_fun(),
-          new_generation_thresh   = 0     :: non_neg_integer()
-        }).
-
--record(cxy_cache_value,
-        {
-          key      :: ?TM:cached_key(),
-          value    :: ?TM:cached_value(),
-          version  :: ?TM:cached_value_vsn()
-        }).
-
+-include("cxy_cache.hrl").
 
 cleanup(Cache_Name) ->     
     true = ?TM:delete(Cache_Name),

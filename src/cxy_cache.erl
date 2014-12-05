@@ -47,34 +47,7 @@
 -type gen_fun_opt()    :: none | gen_fun().
 -type check_gen_fun()  :: gen_fun_opt() | thresh_type().
 
--type access_count()   :: non_neg_integer().
--type gen1_hit_count() :: access_count().
--type gen2_hit_count() :: access_count().
--type refresh_count()  :: access_count().
--type fetch_count()    :: access_count().
--type error_count()    :: access_count().
--type miss_count()     :: access_count().
-
--export_type([cache_name/0, gen_fun/0, gen_fun_opt/0, thresh_type/0]).
-
--record(cxy_cache_meta,
-        {
-          cache_name                      :: cache_name(),
-          started        = os:timestamp() :: erlang:timestamp(),
-          gen1_hit_count = 0              :: gen1_hit_count(),
-          gen2_hit_count = 0              :: gen2_hit_count(),
-          refresh_count  = 0              :: refresh_count(),
-          fetch_count    = 0              :: fetch_count(),
-          error_count    = 0              :: error_count(),
-          miss_count     = 0              :: miss_count(),
-          new_gen_time                    :: erlang:timestamp(),
-          old_gen_time                    :: erlang:timestamp(),
-          new_gen                         :: ets:tid(),
-          old_gen                         :: ets:tid(),
-          cache_module                    :: module(),
-          new_generation_function = none  :: check_gen_fun(),
-          new_generation_thresh   = 0     :: non_neg_integer()
-        }).
+-export_type([cache_name/0, gen_fun/0, gen_fun_opt/0, thresh_type/0, check_gen_fun/0]).
 
 %% Each cxy_cache behaviour must have a module which defines the Key => {Version, Value} function.
 -type cached_key()       :: term().
@@ -87,12 +60,18 @@
 
 -export_type([cached_key/0, cached_value/0, cached_value_vsn/0]).
 
--record(cxy_cache_value,
-        {
-          key      :: cached_key(),
-          value    :: cached_value(),
-          version  :: cached_value_vsn()
-        }).
+%% Internal counters are exported for safer metadata spelunking
+-type access_count()   :: non_neg_integer().
+-type gen1_hit_count() :: access_count().
+-type gen2_hit_count() :: access_count().
+-type refresh_count()  :: access_count().
+-type fetch_count()    :: access_count().
+-type error_count()    :: access_count().
+-type miss_count()     :: access_count().
+
+-export_type([gen1_hit_count/0, gen2_hit_count/0, refresh_count/0, fetch_count/0, error_count/0, miss_count/0]).
+
+-include("cxy_cache.hrl").
 
 
 %%%------------------------------------------------------------------------------
