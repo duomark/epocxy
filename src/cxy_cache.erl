@@ -85,8 +85,8 @@
 
 -spec create(cache_name()) -> boolean().
 
--spec info()             -> proplists:proplist().
--spec info(cache_name()) -> proplists:proplist().
+-spec info()      -> [{Cache, proplists:proplist()}] when Cache :: cache_name().
+-spec info(Cache) ->  {Cache, proplists:proplist()}  when Cache :: cache_name().
 
 -spec clear  (cache_name()) -> boolean().
 -spec delete (cache_name()) -> boolean().
@@ -185,7 +185,7 @@ info() ->
 info(Cache_Name)
   when is_atom(Cache_Name) ->
     case ?GET_METADATA(Cache_Name) of
-        [] -> [];
+        [] -> {Cache_Name, []};
         [#cxy_cache_meta{} = Metadata] -> fmt_info(Metadata)
     end.
 

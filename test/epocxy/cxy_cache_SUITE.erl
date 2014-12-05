@@ -161,16 +161,16 @@ check_fetching(_Config) ->
 
 check_info(_Config) ->
     Api = api,
-    [] = ?TM:info(Api),
+    {Api, []} = ?TM:info(Api),
     Api = ?TM:reserve(Api, new_api),
-    ?TM:create(Api),
+    true = ?TM:create(Api),
 
     Prod = product,
-    [] = ?TM:info(Prod),
+    {Prod, []} = ?TM:info(Prod),
     Prod = ?TM:reserve(Prod, new_product),
-    ?TM:create(Prod),
+    true = ?TM:create(Prod),
 
-    {Api, Api_Info}   = ?TM:info(Api),
+    {Api, Api_Info} = ?TM:info(Api),
     [0, 0] = [proplists:get_value(P, Api_Info)  || P <- [new_gen_count, old_gen_count]],
     {Prod, Prod_Info} = ?TM:info(Prod),
     [0, 0] = [proplists:get_value(P, Prod_Info) || P <- [new_gen_count, old_gen_count]],
