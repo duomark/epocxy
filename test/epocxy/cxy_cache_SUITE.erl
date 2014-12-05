@@ -4,18 +4,21 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([
+         proper_check_info/1,
+
          check_create/1, check_clear_and_delete/1,
-         check_fetching/1, check_info/1,
+         check_fetching/1,
          check_fsm_cache/1
         ]).
 
--include_lib("common_test/include/ct.hrl").
+-include("epocxy_common_test.hrl").
 
 -spec all() -> [atom()].
-
 all() -> [
+          proper_check_info,
+
           check_create, check_clear_and_delete,
-          check_fetching, check_info, check_fsm_cache
+          check_fetching, check_fsm_cache
          ].
 
 -type config() :: proplists:proplist().
@@ -34,23 +37,29 @@ end_per_suite(Config)  -> Config.
                               
 -include("cxy_cache.hrl").
 
-cleanup(Cache_Name) ->     
-    true = ?TM:delete(Cache_Name),
-    true = ets:info(?TM, named_table),
-    [] = ets:tab2list(?TM).
+-spec proper_check_info(config()) -> ok.
+%% @doc
+%%   Validate that any atom can be used to register a service.
+%% @end
+proper_check_info(_Config) ->
+    ct:log("Test using an atom as a cache name"),
+    Test_Cache_Name = ?FORALL(Cache_Name, ?SUCHTHAT(Cache_Name, atom(), Cache_Name =/= ''),
+                              check_info_test(Cache_Name)),
+    true = proper:quickcheck(Test_Cache_Name, ?PQ_NUM(5)),
+    ct:comment("Successfully tested atoms as cache_names"),
+    ok.
 
-metas_match(#cxy_cache_meta{
-               cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
-               miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
-               new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start1} = _Earlier,
-            #cxy_cache_meta{
-               cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
-               miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
-               new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start2} = _Later) ->
-    Start1 < Start2;
-metas_match(A,B) -> ct:log("~w~n", [A]),
-                    ct:log("~w~n", [B]),
-                    false.
+check_info_test(Cache_Name) ->
+    ct:comment("Testing cache_name: ~p", [Cache_Name]),
+    ct:log("Testing cache_name: ~p", [Cache_Name]),
+    {Cache_Name, []} = ?TM:info(Cache_Name),
+    Cache_Name = ?TM:reserve(Cache_Name, list_to_atom(atom_to_list(Cache_Name) ++ "_module")),
+    true = ?TM:create(Cache_Name),
+    {Cache_Name, Cache_Info} = ?TM:info(Cache_Name),
+    true = is_list(Cache_Info),
+    [0, 0] = [proplists:get_value(Prop, Cache_Info) || Prop <- [new_gen_count, old_gen_count]],
+    eliminate_cache(Cache_Name),
+    true.
 
 
 do_create(Cache_Name, Cache_Obj) ->
@@ -79,7 +88,7 @@ check_create(_Config) ->
     {error, already_exists} = ?TM:reserve(foo, fake_module, count, 5000),
     ?TM:delete(foo),
 
-    cleanup(Cache_Name),
+    eliminate_cache(Cache_Name),
     ok.
 
 check_clear_and_delete(_Config) ->
@@ -99,7 +108,7 @@ check_clear_and_delete(_Config) ->
     false = ?TM:clear(foo),
     false = ?TM:delete(foo),
 
-    cleanup(Cache_Name),
+    eliminate_cache(Cache_Name),
     [0, undefined, undefined] = [ets:info(Tab, size) || Tab <- [?TM, Old_Gen, New_Gen]],
     ok.
 
@@ -156,26 +165,7 @@ check_fetching(_Config) ->
     [] = ets:lookup(New, bar),
     [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
 
-    cleanup(Cache_Name),
-    ok.
-
-check_info(_Config) ->
-    Api = api,
-    {Api, []} = ?TM:info(Api),
-    Api = ?TM:reserve(Api, new_api),
-    true = ?TM:create(Api),
-
-    Prod = product,
-    {Prod, []} = ?TM:info(Prod),
-    Prod = ?TM:reserve(Prod, new_product),
-    true = ?TM:create(Prod),
-
-    {Api, Api_Info} = ?TM:info(Api),
-    [0, 0] = [proplists:get_value(P, Api_Info)  || P <- [new_gen_count, old_gen_count]],
-    {Prod, Prod_Info} = ?TM:info(Prod),
-    [0, 0] = [proplists:get_value(P, Prod_Info) || P <- [new_gen_count, old_gen_count]],
-
-    [Api, Prod] = [Cache || {Cache, _Proplist} <- ?TM:info()],
+    eliminate_cache(Cache_Name),
     ok.
 
 
@@ -217,3 +207,26 @@ check_fsm_cache(_Config) ->
 
     unlink(Sup),
     ok.
+
+
+%%%------------------------------------------------------------------------------
+%%% Support functions
+%%%------------------------------------------------------------------------------
+
+eliminate_cache(Cache_Name) ->   
+    true = ?TM:delete(Cache_Name),
+    true = ets:info(?TM, named_table),
+    [] = ets:tab2list(?TM).
+
+metas_match(#cxy_cache_meta{
+               cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
+               miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
+               new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start1} = _Earlier,
+            #cxy_cache_meta{
+               cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
+               miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
+               new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start2} = _Later) ->
+    Start1 < Start2;
+metas_match(A,B) -> ct:log("~w~n", [A]),
+                    ct:log("~w~n", [B]),
+                    false.
