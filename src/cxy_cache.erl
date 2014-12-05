@@ -42,15 +42,12 @@
 -export([new_generation/1, maybe_make_new_generation/1]).
 
 -type cache_name()    :: atom().
--type cache_key()     :: any().
--type cache_value()   :: any().
 -type thresh_type()   :: count | time.
 -type gen_fun()       :: fun((cache_name(), non_neg_integer(), erlang:timestamp()) -> boolean()).
 -type gen_fun_opt()   :: none | gen_fun().
 -type check_gen_fun() :: gen_fun_opt() | thresh_type().
 
--export_type([cache_name/0, cache_key/0, cache_value/0,
-              gen_fun/0, gen_fun_opt/0, thresh_type/0]).
+-export_type([cache_name/0, gen_fun/0, gen_fun_opt/0, thresh_type/0]).
 
 -record(cxy_cache_meta,
         {
@@ -294,8 +291,8 @@ replace_check_generation_fun(Cache_Name, Fun)
 -type error_count()    :: non_neg_integer().
 -type miss_count()     :: non_neg_integer().
 
--spec delete_item (cache_name(), cache_key()) -> true.
--spec fetch_item  (cache_name(), cache_key()) -> cache_value() | {error, tuple()}.
+-spec delete_item (cache_name(), cached_key()) -> true.
+-spec fetch_item  (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
 -spec get_and_clear_counts(cache_name())
                           -> {cache_name(), gen1_hit_count(), gen2_hit_count(),
                               miss_count(), error_count()}.
