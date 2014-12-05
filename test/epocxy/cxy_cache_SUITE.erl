@@ -42,11 +42,12 @@ end_per_suite(Config)  -> Config.
         {
           cache_name                      :: cache_name(),
           started        = os:timestamp() :: erlang:timestamp(),
-          fetch_count    = 0              :: non_neg_integer(),
-          gen1_hit_count = 0              :: non_neg_integer(),
-          gen2_hit_count = 0              :: non_neg_integer(),
-          miss_count     = 0              :: non_neg_integer(),
-          error_count    = 0              :: non_neg_integer(),
+          gen1_hit_count = 0              :: gen1_hit_count(),
+          gen2_hit_count = 0              :: gen2_hit_count(),
+          refresh_count  = 0              :: refresh_count(),
+          fetch_count    = 0              :: fetch_count(),
+          error_count    = 0              :: error_count(),
+          miss_count     = 0              :: miss_count(),
           new_gen_time                    :: erlang:timestamp(),
           old_gen_time                    :: erlang:timestamp(),
           new_gen                         :: ets:tid(),
@@ -69,12 +70,14 @@ cleanup(Cache_Name) ->
     true = ets:info(?TM, named_table),
     [] = ets:tab2list(?TM).
 
-metas_match(#cxy_cache_meta{cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
-                            miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
-                            new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start1} = _Earlier,
-            #cxy_cache_meta{cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
-                            miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
-                            new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start2} = _Later) ->
+metas_match(#cxy_cache_meta{
+               cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
+               miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
+               new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start1} = _Earlier,
+            #cxy_cache_meta{
+               cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
+               miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
+               new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start2} = _Later) ->
     Start1 < Start2;
 metas_match(A,B) -> ct:log("~w~n", [A]),
                     ct:log("~w~n", [B]),
