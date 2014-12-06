@@ -15,7 +15,7 @@
 
 -spec all() -> [atom()].
 all() -> [
-          proper_check_info,
+          proper_check_info,         % Establish all atoms as valid cache names
 
           check_create, check_clear_and_delete,
           check_fetching, check_fsm_cache
@@ -37,10 +37,8 @@ end_per_suite(Config)  -> Config.
                               
 -include("cxy_cache.hrl").
 
+%% Validate any atom can be used as a cache_name and info/1 will report properly.
 -spec proper_check_info(config()) -> ok.
-%% @doc
-%%   Validate that any atom can be used to register a service.
-%% @end
 proper_check_info(_Config) ->
     ct:log("Test using an atom as a cache name"),
     Test_Cache_Name = ?FORALL(Cache_Name, ?SUCHTHAT(Cache_Name, atom(), Cache_Name =/= ''),
@@ -49,36 +47,38 @@ proper_check_info(_Config) ->
     ct:comment("Successfully tested atoms as cache_names"),
     ok.
 
+%% Checks that create cache and info reporting are consistent.
 check_info_test(Cache_Name) ->
     ct:comment("Testing cache_name: ~p", [Cache_Name]),
     ct:log("Testing cache_name: ~p", [Cache_Name]),
     {Cache_Name, []} = ?TM:info(Cache_Name),
-    Cache_Name = ?TM:reserve(Cache_Name, list_to_atom(atom_to_list(Cache_Name) ++ "_module")),
+
+    %% Test invalid args to reserve...
+    Cache_Module = list_to_atom(atom_to_list(Cache_Name) ++ "_module"),
+    true = try ?TM:reserve(atom_to_list(Cache_Name), Cache_Module) catch error:function_clause -> true end,
+    true = try ?TM:reserve(Cache_Name, atom_to_list(Cache_Module)) catch error:function_clause -> true end,
+
+    %% Test that valid args can only reserve once...
+    Cache_Name = ?TM:reserve(Cache_Name, Cache_Module),
+    {Cache_Name, Cache_Info_Rsrv} = ?TM:info(Cache_Name),
+    [undefined, undefined] = [proplists:get_value(Prop, Cache_Info_Rsrv) || Prop <- [new_gen, old_gen]],
+    {error, already_exists} = ?TM:reserve(Cache_Name, Cache_Module),
+    {error, already_exists} = ?TM:reserve(Cache_Name, any_other_name),
+
+    %% Check that valid info is reported after the cache is created.
     true = ?TM:create(Cache_Name),
     {Cache_Name, Cache_Info} = ?TM:info(Cache_Name),
     true = is_list(Cache_Info),
+
+    %% Verify the info is initialized and an ets table is created for each generation.
     [0, 0] = [proplists:get_value(Prop, Cache_Info) || Prop <- [new_gen_count, old_gen_count]],
+    ct:log("~p", [Cache_Info]),
+    [set, set] = [ets:info(proplists:get_value(Prop, Cache_Info), type)
+                  || Prop <- [new_gen_tid, old_gen_tid]],
     eliminate_cache(Cache_Name),
     true.
 
-
-do_create(Cache_Name, Cache_Obj) ->
-    undefined = ets:info(?TM, named_table),
-    Gen_Fun = fun(Name, Count, Time) -> ?TM:new_gen_count_threshold(Name, Count, Time, 5) end,
-    Cache_Name = ?TM:reserve(Cache_Name, Cache_Obj, Gen_Fun),
-    Exp = ets:tab2list(?TM),
-    1 = length(Exp),
-    Exp1 = hd(Exp),
-    Exp2 = #cxy_cache_meta{cache_name=Cache_Name, cache_module=Cache_Obj, new_gen=undefined, old_gen=undefined,
-                           new_generation_function=Gen_Fun},
-    true = metas_match(Exp1, Exp2),
-    [set, true, public] = [ets:info(?TM, Prop) || Prop <- [type, named_table, protection]],
-    true = ?TM:create(Cache_Name),
-    [#cxy_cache_meta{cache_name=Cache_Name, fetch_count=0, new_gen=Tid1, old_gen=Tid2}] = ets:tab2list(?TM),
-    [set, false, public] = [ets:info(Tid1, Prop) || Prop <- [type, named_table, protection]],
-    [set, false, public] = [ets:info(Tid2, Prop) || Prop <- [type, named_table, protection]],
-    ok.
-
+%% Check that an already created cache name cannot be reserved later.
 check_create(_Config) ->
     Cache_Name = frog_cache,
     do_create(Cache_Name, frog_obj),
@@ -213,11 +213,45 @@ check_fsm_cache(_Config) ->
 %%% Support functions
 %%%------------------------------------------------------------------------------
 
+%% Functions for triggering new generations.
+gen_count_fun (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_count_threshold (Name, Count, Time, Thresh) end.
+%%gen_time_fun  (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_time_threshold  (Name, Count, Time, Thresh) end.
+
+%% Create a new cache.
+do_create(Cache_Name, Cache_Obj) ->
+    undefined = ets:info(?TM, named_table),
+    Gen_Fun = gen_count_fun(5),
+    Cache_Name = ?TM:reserve(Cache_Name, Cache_Obj, Gen_Fun),
+    true = validate_cache_metatable(Cache_Name, Cache_Obj, Gen_Fun),
+    true = ?TM:create(Cache_Name),
+    true = validate_cache_generations(Cache_Name),
+    true.
+
+validate_cache_metatable(Cache_Name, Cache_Obj, Gen_Fun) ->
+    Exp = ets:tab2list(?TM),
+    1 = length(Exp),
+    Exp1 = hd(Exp),
+    Exp2 = #cxy_cache_meta{cache_name=Cache_Name, cache_module=Cache_Obj,
+                           new_gen=undefined, old_gen=undefined, new_generation_function=Gen_Fun},
+    true = metas_match(Exp1, Exp2),
+    [set, true, public] = [ets:info(?TM, Prop) || Prop <- [type, named_table, protection]],
+    true.
+    
+validate_cache_generations(Cache_Name) ->
+    [Metadata] = ets:lookup(?TM, Cache_Name),
+    #cxy_cache_meta{cache_name=Cache_Name, new_gen=Tid1, old_gen=Tid2} = Metadata,
+    [set, false, public] = [ets:info(Tid1, Prop) || Prop <- [type, named_table, protection]],
+    [set, false, public] = [ets:info(Tid2, Prop) || Prop <- [type, named_table, protection]],
+    true.
+
+%% Delete cache and verify that all ets cache meta data is gone.
+%% This only works if there is just one (or zero) cache(s) registered.
 eliminate_cache(Cache_Name) ->   
     true = ?TM:delete(Cache_Name),
     true = ets:info(?TM, named_table),
     [] = ets:tab2list(?TM).
 
+%% Verify that two metadata records match provided that the 2nd was created later than the 1st.
 metas_match(#cxy_cache_meta{
                cache_name=Name, fetch_count=Fetch, gen1_hit_count=Hit_Count1, gen2_hit_count=Hit_Count2,
                miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
@@ -227,6 +261,8 @@ metas_match(#cxy_cache_meta{
                miss_count=Miss_Count, error_count=Err_Count, cache_module=Mod, new_gen=New, old_gen=Old,
                new_generation_function=Gen_Fun, new_generation_thresh=Thresh, started=Start2} = _Later) ->
     Start1 < Start2;
+
+%% Logs and fails if there is any field mismatch.
 metas_match(A,B) -> ct:log("~w~n", [A]),
                     ct:log("~w~n", [B]),
                     false.

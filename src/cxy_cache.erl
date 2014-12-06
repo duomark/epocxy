@@ -12,6 +12,15 @@
 %%%   table is deleted. This is a form of mass garbage collection which
 %%%   avoids using timers and expiration of individual cached elements.
 %%%
+%%%   Cache names must be reserved before the actual cache can be created.
+%%%   This ensures that the metadata is available before the cache storage
+%%%   is available, but more importantly reserving also creates the metadata
+%%%   ets table if it doesn't already exist. Both reserve and create must
+%%%   be called from a process which will outlive any processes which will
+%%%   access the caches. Since the cached data and metadata are stored in
+%%%   ets tables, the creating process will be the owner and that process
+%%%   cannot die or the tables will be automatically deleted.
+%%%
 %%%   v0.9.8b changes the return value of Mod:create_key_value/1 to account
 %%%   for different versions of the cached value. In a race condition, the
 %%%   later version wins now instead of the first to store in the ets table.
@@ -204,11 +213,19 @@ fmt_info(#cxy_cache_meta{cache_name     = Cache_Name,
                          new_generation_thresh   = NGT
                         }) ->
     Now = os:timestamp(),
-    New_Time_Diff = round(timer:now_diff(Now, New_Time) / 10000 / 60) / 100,
-    Old_Time_Diff = round(timer:now_diff(Now, Old_Time) / 10000 / 60) / 100,
+    New_Time_Diff = case New_Time of
+                        undefined -> undefined;
+                        New_Time  -> round(timer:now_diff(Now, New_Time) / 10000 / 60) / 100
+                    end,
+    Old_Time_Diff = case Old_Time of
+                        undefined -> undefined;
+                        Old_Time  -> round(timer:now_diff(Now, Old_Time) / 10000 / 60) / 100
+                    end,
     [[New_Count, New_Memory], [Old_Count, Old_Memory]]
-        = [[ets:info(Tab, Attr) || Attr <- [size, memory]]
-           || Tab <- [New, Old]],
+        = [case Tab of
+               undefined -> [0, 0];
+               _Table_Id -> [ets:info(Tab, Attr) || Attr <- [size, memory]]
+           end || Tab <- [New, Old]],
 
     %% Fetch count reflects the next request count, so we decrement by 1.
     {Cache_Name, [
@@ -221,6 +238,8 @@ fmt_info(#cxy_cache_meta{cache_name     = Cache_Name,
                   {fetch_count,   Fetches},
                   {error_count,   Error_Count},
                   {miss_count,    Miss_Count},
+                  {new_gen_tid,   New},
+                  {old_gen_tid,   Old},
                   {new_generation_thresh,        NGT},
                   {new_generation_function,      NGF},
                   {num_accesses_this_generation, Fetches},
@@ -450,7 +469,13 @@ determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) ->
 %%%
 %%% These functions must be called by the process that will own the generational
 %%% ets tables. The owning process has to stick around longer than the generation
-%%% lasts, or the exit of the owner will destroy the ets table prematurely.
+%%% lasts, or the exit of the owner will destroy the ets table prematurely. This
+%%% should be the same process which reserves the cache names and creates the
+%%% caches originally for consistency. This is usually achieved by configuration
+%%% data that is read and applied on startup using a dedicated supervisor and/or
+%%% gen_fsm for managing the state of caching and all the ets tables. This
+%%% library provides cxy_cache_sup and cxy_cache_fsm for exactly that purpose.
+%%% cxy_cache_fsm serves as an external signal for new generation notification.
 %%%------------------------------------------------------------------------------
 
 -spec new_generation            (cache_name()) -> ets:tid() | {error, {no_cache_metadata, cache_name()}}.
