@@ -1,32 +1,78 @@
+%%%------------------------------------------------------------------------------
+%%% @copyright (c) 2013-2014, DuoMark International, Inc.
+%%% @author Jay Nelson <jay@duomark.com>
+%%% @reference 2013-2014 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference The license is based on the template for Modified BSD from
+%%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
+%%% @doc
+%%%   Tests for cxy_cache use both common_test and PropEr to check for errors.
+%%%   Common_test is the driving framework and is used to validate simple cases
+%%%   of calling API functions with pre-canned valid values. The PropEr tests
+%%%   are designed to comprehensively generate values which stress the workings
+%%%   of the caching API.
+%%%
+%%%   Simple tests precede PropEr tests in sequence groups so that breakage in
+%%%   the basic API are found more quickly without invoking PropEr generators.
+%%%
+%%% @since 0.9.6
+%%% @end
+%%%------------------------------------------------------------------------------
 -module(cxy_cache_SUITE).
 -auth('jay@duomark.com').
 -vsn('').
 
--export([all/0, init_per_suite/1, end_per_suite/1]).
--export([
-         proper_check_info/1,
+-export([all/0, groups/0,
+         init_per_suite/1,    end_per_suite/1,
+         init_per_group/1,    end_per_group/1,
+         init_per_testcase/2, end_per_testcase/2
+        ]).
 
-         check_create/1, check_clear_and_delete/1,
-         check_fetching/1,
-         check_fsm_cache/1
+-export([
+         proper_check_create/1,
+         vf_check_one_fetch/1, vf_check_many_fetches/1,
+         check_fsm_cache/1,
+
+         check_clear_and_delete/1
         ]).
 
 -include("epocxy_common_test.hrl").
 
--spec all() -> [atom()].
-all() -> [
-          proper_check_info,         % Establish all atoms as valid cache names
+-type test_case()  :: atom().
+-type test_group() :: atom().
 
-          check_create, check_clear_and_delete,
-          check_fetching, check_fsm_cache
+-spec all() -> [test_case() | {group, test_group()}].
+all() -> [
+          proper_check_create,         % Establish all atoms as valid cache names
+          {group, verify_fetch},       % Tests fetching from the cache, even when empty
+          check_fsm_cache,             % Certifies the cache supervisor and FSM ets ownership
+
+          check_clear_and_delete
          ].
 
--type config() :: proplists:proplist().
--spec init_per_suite(config()) -> config().
--spec end_per_suite(config()) -> config().
+-spec groups() -> [{test_group(), [sequence], [test_case() | {group, test_group()}]}].
+groups() -> [
+             {verify_fetch, [sequence], [vf_check_one_fetch, vf_check_many_fetches]}
+             ].
+    
 
-init_per_suite(Config) -> Config.
-end_per_suite(Config)  -> Config.
+-type config() :: proplists:proplist().
+-spec init_per_suite (config()) -> config().
+-spec end_per_suite  (config()) -> config().
+
+init_per_suite (Config) -> Config.
+end_per_suite  (Config)  -> Config.
+
+-spec init_per_group (config()) -> config().
+-spec end_per_group  (config()) -> config().
+
+init_per_group (Config) -> Config.
+end_per_group  (Config) -> Config.
+
+-spec init_per_testcase (atom(), config()) -> config().
+-spec end_per_testcase  (atom(), config()) -> config().
+
+init_per_testcase (_Test_Case, Config) -> Config.
+end_per_testcase  (_Test_Case, Config) -> Config.
 
 -define(TM, cxy_cache).
 
@@ -38,17 +84,17 @@ end_per_suite(Config)  -> Config.
 -include("cxy_cache.hrl").
 
 %% Validate any atom can be used as a cache_name and info/1 will report properly.
--spec proper_check_info(config()) -> ok.
-proper_check_info(_Config) ->
+-spec proper_check_create(config()) -> ok.
+proper_check_create(_Config) ->
     ct:log("Test using an atom as a cache name"),
     Test_Cache_Name = ?FORALL(Cache_Name, ?SUCHTHAT(Cache_Name, atom(), Cache_Name =/= ''),
-                              check_info_test(Cache_Name)),
+                              check_create_test(Cache_Name)),
     true = proper:quickcheck(Test_Cache_Name, ?PQ_NUM(5)),
     ct:comment("Successfully tested atoms as cache_names"),
     ok.
 
 %% Checks that create cache and info reporting are consistent.
-check_info_test(Cache_Name) ->
+check_create_test(Cache_Name) ->
     ct:comment("Testing cache_name: ~p", [Cache_Name]),
     ct:log("Testing cache_name: ~p", [Cache_Name]),
     {Cache_Name, []} = ?TM:info(Cache_Name),
@@ -61,7 +107,8 @@ check_info_test(Cache_Name) ->
     %% Test that valid args can only reserve once...
     Cache_Name = ?TM:reserve(Cache_Name, Cache_Module),
     {Cache_Name, Cache_Info_Rsrv} = ?TM:info(Cache_Name),
-    [undefined, undefined] = [proplists:get_value(Prop, Cache_Info_Rsrv) || Prop <- [new_gen, old_gen]],
+    [undefined, undefined] = [proplists:get_value(Prop, Cache_Info_Rsrv, missing_prop)
+                              || Prop <- [new_gen_tid, old_gen_tid]],
     {error, already_exists} = ?TM:reserve(Cache_Name, Cache_Module),
     {error, already_exists} = ?TM:reserve(Cache_Name, any_other_name),
 
@@ -72,29 +119,17 @@ check_info_test(Cache_Name) ->
 
     %% Verify the info is initialized and an ets table is created for each generation.
     [0, 0] = [proplists:get_value(Prop, Cache_Info) || Prop <- [new_gen_count, old_gen_count]],
-    ct:log("~p", [Cache_Info]),
     [set, set] = [ets:info(proplists:get_value(Prop, Cache_Info), type)
                   || Prop <- [new_gen_tid, old_gen_tid]],
     eliminate_cache(Cache_Name),
     true.
 
-%% Check that an already created cache name cannot be reserved later.
-check_create(_Config) ->
-    Cache_Name = frog_cache,
-    do_create(Cache_Name, frog_obj),
-    foo = ?TM:reserve(foo, frog_obj, count, 1000),
-    Gen_Fun = fun(Name, _Count, _Time) -> Name =:= foo end,
-    {error, already_exists} = ?TM:reserve(foo, fake_module, Gen_Fun),
-    {error, already_exists} = ?TM:reserve(foo, fake_module, count, 5000),
-    ?TM:delete(foo),
-
-    eliminate_cache(Cache_Name),
-    ok.
-
 check_clear_and_delete(_Config) ->
     Cache_Name = frog_cache,
-    do_create(Cache_Name, frog_obj),
-    [{frog, foo}, {frog, foo}, {frog, foo}] = [?TM:fetch_item(Cache_Name, foo) || _N <- lists:seq(1,3)],
+    reserve_and_create_cache(Cache_Name, frog_obj),
+    Expected_Frog = {frog, "frog-3127"},
+    [Expected_Frog, Expected_Frog, Expected_Frog]
+        = [?TM:fetch_item(Cache_Name, "frog-3127") || _N <- lists:seq(1,3)],
     [#cxy_cache_meta{fetch_count=3, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = ets:tab2list(?TM),
     true = Started =/= NG_Time,
 
@@ -112,10 +147,34 @@ check_clear_and_delete(_Config) ->
     [0, undefined, undefined] = [ets:info(Tab, size) || Tab <- [?TM, Old_Gen, New_Gen]],
     ok.
 
-
-check_fetching(_Config) ->
+vf_check_one_fetch(_Config) ->
     Cache_Name = frogs,
-    do_create(Cache_Name, frog_obj),
+    reserve_and_create_cache(Cache_Name, frog_obj),
+    [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
+
+    %% First time creates new value (fetch_count always indicates next access count)...
+    %% (This test depends on a generational cycle larger than the test takes to run)
+    Before_Frog_Insert = erlang:now(),
+    Frog_Id = 'frog-124',
+    {frog, Frog_Id} = ?TM:fetch_item(Cache_Name, Frog_Id),
+    [] = ets:lookup(Old, Frog_Id),
+    [#cxy_cache_value{key=Frog_Id, version=Frog_Time, value={frog, Frog_Id}} = Initial_Frog_Value]
+        = ets:lookup(New, Frog_Id),
+    [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
+    true = timer:now_diff(Frog_Time, Before_Frog_Insert) > 0,
+    false = ?TM:maybe_make_new_generation(Cache_Name),
+
+    %% Second time fetches existing value...
+    {frog, Frog_Id} = ?TM:fetch_item(Cache_Name, Frog_Id),
+    [] = ets:lookup(Old, Frog_Id),
+    [Initial_Frog_Value] = ets:lookup(New, Frog_Id),
+    [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
+    false = ?TM:maybe_make_new_generation(Cache_Name),
+    ok.
+
+vf_check_many_fetches(_Config) ->
+    Cache_Name = frogs,
+    reserve_and_create_cache(Cache_Name, frog_obj),
     [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
 
     %% First time creates new value (fetch_count always indicates next access count)...
@@ -194,10 +253,10 @@ check_fsm_cache(_Config) ->
     [#cxy_cache_meta{new_gen=Fox2,    old_gen=Fox1}]    = ets:lookup(?TM, fox_cache),
     [#cxy_cache_meta{new_gen=Rabbit2, old_gen=Rabbit1}] = ets:lookup(?TM, rabbit_cache),
     [Fox_Cache, Fox_Cache, Rabbit_Cache, Rabbit_Cache]
-        = [ets:info(Tab, owner) || Tab <- [Fox1, Fox2, Rabbit1, Rabbit2]],
+        = [ets:info(Tab, owner) || Tab <- [Fox2, Fox1, Rabbit2, Rabbit1]],
     
-    %% Wait for a new generation...
-    timer:sleep(1500),
+    %% Wait for a new generation (1.3 seconds minimum)...
+    timer:sleep(1500),     % Additional time for timeout jitter
     [#cxy_cache_meta{new_gen=Fox3,    old_gen=Fox2}]    = ets:lookup(?TM, fox_cache),
     [#cxy_cache_meta{new_gen=Rabbit3, old_gen=Rabbit2}] = ets:lookup(?TM, rabbit_cache),
     true = (Fox3 =/= Fox2 andalso Rabbit3 =/= Rabbit2),
@@ -205,6 +264,11 @@ check_fsm_cache(_Config) ->
         = [ets:info(Tab, owner) || Tab <- [Fox3, Fox2, Rabbit3, Rabbit2]],
     [undefined, undefined] = [ets:info(Tab) || Tab <- [Fox1, Rabbit1]],
 
+    2 = ets:info(?TM, size),
+    true = ?TM:delete(fox_cache),
+    1 = ets:info(?TM, size),
+    true = ?TM:delete(rabbit_cache),
+    0 = ets:info(?TM, size),
     unlink(Sup),
     ok.
 
@@ -217,9 +281,9 @@ check_fsm_cache(_Config) ->
 gen_count_fun (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_count_threshold (Name, Count, Time, Thresh) end.
 %%gen_time_fun  (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_time_threshold  (Name, Count, Time, Thresh) end.
 
-%% Create a new cache.
-do_create(Cache_Name, Cache_Obj) ->
-    undefined = ets:info(?TM, named_table),
+%% Create a new cache (each testcase creates the ets metadata table on first reserve call).
+reserve_and_create_cache(Cache_Name, Cache_Obj) ->
+%%    undefined = ets:info(?TM, named_table),
     Gen_Fun = gen_count_fun(5),
     Cache_Name = ?TM:reserve(Cache_Name, Cache_Obj, Gen_Fun),
     true = validate_cache_metatable(Cache_Name, Cache_Obj, Gen_Fun),
@@ -228,11 +292,9 @@ do_create(Cache_Name, Cache_Obj) ->
     true.
 
 validate_cache_metatable(Cache_Name, Cache_Obj, Gen_Fun) ->
-    Exp = ets:tab2list(?TM),
-    1 = length(Exp),
-    Exp1 = hd(Exp),
-    Exp2 = #cxy_cache_meta{cache_name=Cache_Name, cache_module=Cache_Obj,
-                           new_gen=undefined, old_gen=undefined, new_generation_function=Gen_Fun},
+    [Exp1] = ets:tab2list(?TM),
+     Exp2  = #cxy_cache_meta{cache_name=Cache_Name, cache_module=Cache_Obj,
+                             new_gen=undefined, old_gen=undefined, new_generation_function=Gen_Fun},
     true = metas_match(Exp1, Exp2),
     [set, true, public] = [ets:info(?TM, Prop) || Prop <- [type, named_table, protection]],
     true.

@@ -7,6 +7,10 @@
 %%% @doc
 %%%   Generational caching ets owner process. Implemented as a
 %%%   supervised FSM to separate management logic from caching logic.
+%%%
+%%%   As of v0.9.8c the poll frequency for cxy_cache_fsm cannot be less
+%%%   than 10 milliseconds.
+%%%
 %%% @since v0.9.6
 %%% @end
 %%%------------------------------------------------------------------------------
@@ -32,7 +36,7 @@
 
 -record(ecf_state, {
           cache_name                  :: cxy_cache:cache_name(),
-          cache_meta_ets = cxy_cache  :: atom(),
+          cache_meta_ets = cxy_cache  :: cxy_cache,
           poll_frequency = ?POLL_FREQ :: pos_integer()
          }).
 
@@ -41,11 +45,12 @@
 %%% External API
 %%%===================================================================
 
--spec start_link(atom(), atom()) -> {ok, pid()}.
--spec start_link(atom(), atom(), cxy_cache:gen_fun()) -> {ok, pid()}.
--spec start_link(atom(), atom(), cxy_cache:thresh_type(),
+-spec start_link(cxy_cache:cache_name(), module())                      -> {ok, pid()}.
+-spec start_link(cxy_cache:cache_name(), module(), pos_integer())       -> {ok, pid()};
+                (cxy_cache:cache_name(), module(), cxy_cache:gen_fun()) -> {ok, pid()}.
+-spec start_link(cxy_cache:cache_name(), module(), cxy_cache:thresh_type(),
                  pos_integer()) -> {ok, pid()}.
--spec start_link(atom(), atom(), cxy_cache:thresh_type(),
+-spec start_link(cxy_cache:cache_name(), module(), cxy_cache:thresh_type(),
                  pos_integer(), pos_integer()) -> {ok, pid()}.
 
 %% start_link is called to reserve a cxy_cache name and specification.
@@ -69,14 +74,14 @@ start_link(Cache_Name, Cache_Mod, Gen_Fun)
 %% Change frequency that generation function runs...
 start_link(Cache_Name, Cache_Mod, Gen_Fun, Poll_Time)
   when is_atom(Cache_Name), is_atom(Cache_Mod), is_function(Gen_Fun, 3),
-       is_integer(Poll_Time), Poll_Time > 0 ->
+       is_integer(Poll_Time), Poll_Time >= 10 ->
     Cache_Name = cxy_cache:reserve(Cache_Name, Cache_Mod, Gen_Fun),
     gen_fsm:start_link(?MODULE, {Cache_Name, Poll_Time}, []);
 %% Use strictly time-based microsecond generational change
 %% (but millisecond granularity on FSM polling)...
 start_link(Cache_Name, Cache_Mod, time, Gen_Frequency)
   when is_atom(Cache_Name), is_atom(Cache_Mod),
-       is_integer(Gen_Frequency), Gen_Frequency >= 1000 ->
+       is_integer(Gen_Frequency), Gen_Frequency >= 10000 ->
     Cache_Name = cxy_cache:reserve(Cache_Name, Cache_Mod, time, Gen_Frequency),
     Poll_Time = round(Gen_Frequency / 1000) + 1,
     gen_fsm:start_link(?MODULE, {Cache_Name, Poll_Time}, []);
@@ -87,7 +92,7 @@ start_link(Cache_Name, Cache_Mod, count, Threshold)
     gen_fsm:start_link(?MODULE, {Cache_Name}, []);
 %% Override default polling with a non-generational cache.
 start_link(Cache_Name, Cache_Mod, none, Poll_Time)
-  when is_atom(Cache_Name), is_atom(Cache_Mod), is_integer(Poll_Time), Poll_Time > 0 ->
+  when is_atom(Cache_Name), is_atom(Cache_Mod), is_integer(Poll_Time), Poll_Time >= 10 ->
     Cache_Name = cxy_cache:reserve(Cache_Name, Cache_Mod, none),
     gen_fsm:start_link(?MODULE, {Cache_Name, Poll_Time}, []).
 
@@ -104,10 +109,9 @@ start_link(Cache_Name, Cache_Mod, count, Threshold, Poll_Time)
 
 -type state_name() :: 'POLL'.
 
--spec init({atom()} | {atom(), pos_integer()}) -> {ok, 'POLL', #ecf_state{}}.
--spec terminate(atom(), state_name(), #ecf_state{}) -> ok.
--spec code_change(any(), state_name(), #ecf_state{}, any())
-                 -> {ok, state_name(), #ecf_state{}}.
+-spec init({cxy_cache:cache_name()} | {cxy_cache:cache_name(), pos_integer()}) -> {ok, 'POLL', #ecf_state{}}.
+-spec terminate   (any(), state_name(), #ecf_state{})        -> ok.
+-spec code_change (any(), state_name(), #ecf_state{}, any()) -> {ok, state_name(), #ecf_state{}}.
 
 %% Internal ets table instances containing the generations of cached
 %% data will be owned by a corresponding FSM process so that
@@ -129,8 +133,8 @@ init_finish(#ecf_state{poll_frequency=Poll_Millis} = Init_State) ->
     erlang:send_after(Poll_Millis, self(), timeout),
     {ok, 'POLL', Init_State}.
 
-terminate(_Reason, _State_Name, #ecf_state{}) -> ok.
-code_change(_OldVsn, State_Name, State, _Extra) -> {ok, State_Name, State}.
+terminate   (_Reason, _State_Name, #ecf_state{}) -> ok.
+code_change (_OldVsn,  State_Name, #ecf_state{} = State, _Extra) -> {ok, State_Name, State}.
 
 %% The FSM has only the 'POLL' state.
 -spec 'POLL'(stop, #ecf_state{}) -> {stop, normal}.
@@ -156,5 +160,5 @@ handle_info (_Info, State_Name, State) ->
 -spec handle_sync_event(any(), {pid(), reference()}, state_name(), #ecf_state{})
                        -> {reply, any(), state_name(), #ecf_state{}}.
 
-handle_event(_Event, State_Name, State) -> {next_state, State_Name, State}.
-handle_sync_event(_Event, _From, State_Name, State) -> {reply, ok, State_Name, State}.
+handle_event      (_Event,        State_Name, State) -> {next_state, State_Name, State}.
+handle_sync_event (_Event, _From, State_Name, State) -> {reply, ok,  State_Name, State}.

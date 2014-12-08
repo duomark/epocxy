@@ -9,6 +9,10 @@
 %%%   owners of the underlying ets tables implementing the cache. The
 %%%   ets tables need to be owned by long-lived processes which do
 %%%   little computation to avoid crashing and losing the cached data.
+%%%
+%%%   As of v0.9.8c the poll frequency for cxy_cache_fsm cannot be less
+%%%   than 10 milliseconds.
+%%%
 %%% @since v0.9.6
 %%% @end
 %%%------------------------------------------------------------------------------
@@ -31,9 +35,11 @@
 %% ===================================================================
 
 -spec start_link() -> {ok, pid()}.
--spec start_cache(atom(), atom()) -> {ok, pid()}.
--spec start_cache(atom(), atom(), cxy_cache:gen_fun()) -> {ok, pid()}.
--spec start_cache(atom(), atom(), cxy_cache:thresh_type(), pos_integer()) -> {ok, pid()}.
+-spec start_cache(cyx_cache:cache_name(), module())                      -> {ok, pid()}.
+-spec start_cache(cyx_cache:cache_name(), module(), pos_integer())       -> {ok, pid()};
+                 (cyx_cache:cache_name(), module(), cxy_cache:gen_fun()) -> {ok, pid()}.
+
+-spec start_cache(cyx_cache:cache_name(), module(), cxy_cache:thresh_type(), pos_integer()) -> {ok, pid()}.
 
 %% start_link creates the single metadata supervisor for all caches.
 %% start_cache creates an instance of a cache as a child of this supervisor.
@@ -50,7 +56,7 @@ start_cache(Cache_Name, Cache_Mod)
 %% Start a generational cache with a specific poll time.
 start_cache(Cache_Name, Cache_Mod, Poll_Time)
   when is_atom(Cache_Name), is_atom(Cache_Mod),
-       is_integer(Poll_Time), Poll_Time > 0 ->
+       is_integer(Poll_Time), Poll_Time >= 10 ->
     Args = [Cache_Name, Cache_Mod, none, Poll_Time],
     supervisor:start_child(?SERVER, Args);
 
