@@ -148,83 +148,81 @@ check_clear_and_delete(_Config) ->
     ok.
 
 vf_check_one_fetch(_Config) ->
-    Cache_Name = frogs,
-    reserve_and_create_cache(Cache_Name, frog_obj),
-    [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
-
-    %% First time creates new value (fetch_count always indicates next access count)...
-    %% (This test depends on a generational cycle larger than the test takes to run)
-    Before_Frog_Insert = erlang:now(),
-    Frog_Id = 'frog-124',
-    {frog, Frog_Id} = ?TM:fetch_item(Cache_Name, Frog_Id),
-    [] = ets:lookup(Old, Frog_Id),
-    [#cxy_cache_value{key=Frog_Id, version=Frog_Time, value={frog, Frog_Id}} = Initial_Frog_Value]
-        = ets:lookup(New, Frog_Id),
-    [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
-    true = timer:now_diff(Frog_Time, Before_Frog_Insert) > 0,
-    false = ?TM:maybe_make_new_generation(Cache_Name),
-
-    %% Second time fetches existing value...
-    {frog, Frog_Id} = ?TM:fetch_item(Cache_Name, Frog_Id),
-    [] = ets:lookup(Old, Frog_Id),
-    [Initial_Frog_Value] = ets:lookup(New, Frog_Id),
-    [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
-    false = ?TM:maybe_make_new_generation(Cache_Name),
+    validate_create_and_fetch(frogs, frog_obj, frog, 'frog-124'),
+    eliminate_cache(frogs),
     ok.
 
 vf_check_many_fetches(_Config) ->
-    Cache_Name = frogs,
-    reserve_and_create_cache(Cache_Name, frog_obj),
+    validate_new_generations(frogs, frog_obj, frog, 'frog-222', 'frog-333'),
+    eliminate_cache(frogs),
+    ok.
+
+validate_create_and_fetch(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Instance_Key) ->
+    reserve_and_create_cache(Cache_Name, Cache_Obj_Type),
     [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
 
     %% First time creates new value (fetch_count always indicates next access count)...
-    {frog, foo} = ?TM:fetch_item(Cache_Name, foo),
-    [] = ets:lookup(Old, foo),
-    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
+    Before_Obj_Insert = erlang:now(),
+    {Obj_Record_Type, Obj_Instance_Key} = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    [] = ets:lookup(Old, Obj_Instance_Key),
+    [#cxy_cache_value{key=Obj_Instance_Key, version=Obj_Create_Time,
+                      value={Obj_Record_Type, Obj_Instance_Key}}] = ets:lookup(New, Obj_Instance_Key),
     [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
+    true = timer:now_diff(Obj_Create_Time, Before_Obj_Insert) > 0,
     false = ?TM:maybe_make_new_generation(Cache_Name),
+    ok.
+
+validate_new_generations(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1, Obj_Key2) ->
+    ok = validate_create_and_fetch(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1),
+    [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
 
     %% Second time fetches existing value...
-    {frog, foo} = ?TM:fetch_item(Cache_Name, foo),
-    [] = ets:lookup(Old, foo),
-    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
+    {Obj_Record_Type, Obj_Key1} = ?TM:fetch_item(Cache_Name, Obj_Key1),
+    [] = ets:lookup(Old, Obj_Key1),
+    [Initial_Obj_Value1] = ets:lookup(New, Obj_Key1),
     [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
     false = ?TM:maybe_make_new_generation(Cache_Name),
 
     %% Retrieve 3 more times still no new generation...
-    [{frog, foo}, {frog, foo}, {frog, foo}] = [?TM:fetch_item(Cache_Name, foo) || _N <- lists:seq(1,3)],
-    [] = ets:lookup(Old, foo),
-    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
+    Exp3 = lists:duplicate(3, {Obj_Record_Type, Obj_Key1}),
+    Exp3 = [?TM:fetch_item(Cache_Name, Obj_Key1) || _N <- lists:seq(1,3)],
+    [] = ets:lookup(Old, Obj_Key1),
+    [Initial_Obj_Value1] = ets:lookup(New, Obj_Key1),
     [#cxy_cache_meta{fetch_count=5}] = ets:lookup(?TM, Cache_Name),
     false = ?TM:maybe_make_new_generation(Cache_Name),
 
     %% Once more to get a new generation, then use a new key to insert in the new generation only...
-    {frog, foo} = ?TM:fetch_item(Cache_Name, foo),
+    {Obj_Record_Type, Obj_Key1} = ?TM:fetch_item(Cache_Name, Obj_Key1),
     0 = ets:info(Old, size),
     [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
+    %% Force check which triggers generation rotation...
     true = ?TM:maybe_make_new_generation(Cache_Name),
     [#cxy_cache_meta{new_gen=New2, old_gen=New}] = ets:lookup(?TM, Cache_Name),
     0 = ets:info(New2, size),
-    {frog, bar} = ?TM:fetch_item(Cache_Name, bar),
+    {Obj_Record_Type, Obj_Key2} = ?TM:fetch_item(Cache_Name, Obj_Key2),
     1 = ets:info(New2, size),
-    [] = ets:lookup(New2, foo),
-    [#cxy_cache_value{key=bar, value={frog, bar}}] = ets:lookup(New2, bar),
+    [] = ets:lookup(New2, Obj_Key1),
+    [Initial_Obj_Value2] = ets:lookup(New2, Obj_Key2),
     1 = ets:info(New, size),
-    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
-    [] = ets:lookup(New, bar),
+    [Initial_Obj_Value1] = ets:lookup(New, Obj_Key1),
+    [] = ets:lookup(New, Obj_Key2),
     [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
 
-    %% Now check if migration of key 'foo' works properly...
-    {frog, foo} = ?TM:fetch_item(Cache_Name, foo),
+    %% Now check if migration of key Obj_Key1 works properly...
+    {Obj_Record_Type, Obj_Key1} = ?TM:fetch_item(Cache_Name, Obj_Key1),
     2 = ets:info(New2, size),
-    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New2, foo),
-    [#cxy_cache_value{key=bar, value={frog, bar}}] = ets:lookup(New2, bar),
+    %% Both objects exist in the newest generation...
+    [Initial_Obj_Value1] = ets:lookup(New2, Obj_Key1),
+    [Initial_Obj_Value2] = ets:lookup(New2, Obj_Key2),
+    %% And the now old generation still has a copy of the first key inserted
+    %% because we copy forward without deleting from old generation.
+    %% (The old value will have to be deleted in future on migration when we
+    %%  want to visit all trashed objects on old generation expiration so that
+    %%  we don't garbage collect items that are still active.)
     1 = ets:info(New, size),
-    [#cxy_cache_value{key=foo, value={frog, foo}}] = ets:lookup(New, foo),
-    [] = ets:lookup(New, bar),
+    [Initial_Obj_Value1] = ets:lookup(New, Obj_Key1),
+    [] = ets:lookup(New, Obj_Key2),
     [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
-
-    eliminate_cache(Cache_Name),
     ok.
 
 
@@ -282,6 +280,7 @@ gen_count_fun (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_count_threshold 
 %%gen_time_fun  (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_time_threshold  (Name, Count, Time, Thresh) end.
 
 %% Create a new cache (each testcase creates the ets metadata table on first reserve call).
+%% Generation logic is to create a new generation every 5 fetches.
 reserve_and_create_cache(Cache_Name, Cache_Obj) ->
 %%    undefined = ets:info(?TM, named_table),
     Gen_Fun = gen_count_fun(5),
