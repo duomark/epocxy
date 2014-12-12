@@ -40,7 +40,8 @@
          create/1, clear/1, delete/1,
          info/0, info/1,
          replace_check_generation_fun/2,
-         delete_item/2, fetch_item/2, refresh_item/2,
+         delete_item/2, fetch_item/2,
+         refresh_item/2, refresh_item/3,
          get_and_clear_counts/1
         ]).
 
@@ -300,6 +301,8 @@ replace_check_generation_fun(Cache_Name, Fun)
 -spec delete_item  (cache_name(), cached_key()) -> true.
 -spec fetch_item   (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
 -spec refresh_item (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
+-spec refresh_item (cache_name(), cached_key(), {cached_value_vsn(), cached_value()})
+                   -> cached_value() | {error, tuple()}.
 -spec get_and_clear_counts(cache_name())
                           -> {cache_name(), gen1_hit_count(), gen2_hit_count(),
                               refresh_count(), error_count(), miss_count()}.
@@ -356,6 +359,42 @@ refresh_item(Cache_Name, Key) ->
                               insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
                               %% Then try to clobber it with a newly created value.
                               Cached_Value = create_new_value(Cache_Name, New_Gen_Id, Mod, Key),
+                              return_cache_refresh(Cache_Name, Cached_Value)
+                      catch
+                          %% Old generation was likely eliminated by another request, try creating a new value.
+                          %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
+                          error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
+                      end
+            end
+    end.
+
+refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value}) ->
+    case ?GET_METADATA(Cache_Name) of
+        [] -> {error, {no_cache_metadata, Cache_Name}};
+        [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id, cache_module=Mod}] ->
+            
+            case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
+                false -> {error, {no_gen1_cache, Cache_Name}};
+
+                %% Maybe replace if found in the new generation cache...
+                [#cxy_cache_value{key=Key}] ->
+                    New_Cached_Value
+                        = insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
+                                                Key, Possibly_New_Vsn, Possibly_New_Value),
+                    return_cache_refresh(Cache_Name, New_Cached_Value);
+
+                %% Otherwise migrate the old generation cached value or create a new cached value.
+                [] -> try ets:lookup(Old_Gen_Id, Key) of
+
+                          %% Create a new Mod:create_key_value value if not in old generation...
+                          [] -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
+
+                          %% Otherwise, migrate the old value to the new generation...
+                          [#cxy_cache_value{key=Key} = Old_Obj] ->
+                              insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
+                              %% Then try to clobber it with the passed in new value.
+                              Cached_Value = insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
+                                                                   Key, Possibly_New_Vsn, Possibly_New_Value),
                               return_cache_refresh(Cache_Name, Cached_Value)
                       catch
                           %% Old generation was likely eliminated by another request, try creating a new value.
@@ -423,12 +462,15 @@ get_and_clear_counts(Cache_Name) ->
 create_new_value(Cache_Name, New_Gen_Id, Mod, Key) ->
     try Mod:create_key_value(Key) of
         {Version, Value} ->
-            Tagged_Value = #cxy_cache_value{key=Key, version=Version, value=Value},
-            insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Tagged_Value)            
+            insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value)
     catch Type:Class ->
             Error = {error, {Type,Class, {creating_new_value_with, Mod, Key}}},
             return_cache_error(Cache_Name, Error)
     end.
+
+insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value) ->
+    Tagged_Value = #cxy_cache_value{key=Key, version=Version, value=Value},
+    insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Tagged_Value).
 
 %% Insert the new value, IFF a newer version of the data hasn't already beat us to the cache.
 insert_to_new_gen(Cache_Name, New_Gen_Id, Mod,

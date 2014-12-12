@@ -124,37 +124,29 @@ check_create_test(Cache_Name) ->
     eliminate_cache(Cache_Name),
     true.
 
-check_clear_and_delete(_Config) ->
-    Cache_Name = frog_cache,
-    reserve_and_create_cache(Cache_Name, frog_obj),
-    Expected_Frog = {frog, "frog-3127"},
-    [Expected_Frog, Expected_Frog, Expected_Frog]
-        = [?TM:fetch_item(Cache_Name, "frog-3127") || _N <- lists:seq(1,3)],
-    [#cxy_cache_meta{fetch_count=3, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = ets:tab2list(?TM),
-    true = Started =/= NG_Time,
-
-    true = ?TM:clear(Cache_Name),
-    [#cxy_cache_meta{fetch_count=0, started=New_Time, new_gen_time=New_Time, old_gen_time=New_Time,
-                     new_gen=New_Gen, old_gen=Old_Gen}] = ets:tab2list(?TM),
-    true = New_Time > Started andalso New_Time > NG_Time andalso New_Time > OG_Time,
-    [set,0] = [ets:info(New_Gen, Attr) || Attr <- [type, size]],
-    [set,0] = [ets:info(Old_Gen, Attr) || Attr <- [type, size]],
-
-    false = ?TM:clear(foo),
-    false = ?TM:delete(foo),
-
-    eliminate_cache(Cache_Name),
-    [0, undefined, undefined] = [ets:info(Tab, size) || Tab <- [?TM, Old_Gen, New_Gen]],
-    ok.
-
 vf_check_one_fetch(_Config) ->
-    validate_create_and_fetch(frogs, frog_obj, frog, 'frog-124'),
+    validate_create_and_fetch(frogs, frog_obj, frog, "frog-124"),
     eliminate_cache(frogs),
     ok.
 
 vf_check_many_fetches(_Config) ->
-    validate_new_generations(frogs, frog_obj, frog, 'frog-222', 'frog-333'),
-    eliminate_cache(frogs),
+    ct:log("Test fetches and new generations"),
+    All_Obj_Types = [{fox_obj, fox}, {frog_obj, frog}, {rabbit_obj, rabbit}],
+    Test_Generations
+        = ?FORALL({Cache_Name, Obj_Type_Pair, Instances},
+                  {?SUCHTHAT(Cache_Name, atom(), Cache_Name =/= ''),
+                   union(All_Obj_Types),
+                   ?SUCHTHAT(Instances, {non_empty(string()), non_empty(string())},
+                             element(1,Instances) =/= element(2,Instances))},
+                  begin
+                      {Instance1,    Instance2} = Instances,
+                      {Obj_Type,  Obj_Rec_Type} = Obj_Type_Pair,
+                      Result = validate_new_generations(Cache_Name, Obj_Type, Obj_Rec_Type, Instance1, Instance2),
+                      eliminate_cache(Cache_Name),
+                      Result
+                  end),
+    true = proper:quickcheck(Test_Generations, ?PQ_NUM(5)),
+    ct:comment("Successfully tested new generations"),
     ok.
 
 validate_create_and_fetch(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Instance_Key) ->
@@ -173,6 +165,10 @@ validate_create_and_fetch(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Insta
     ok.
 
 validate_new_generations(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1, Obj_Key2) ->
+    ct:comment("Testing new generations of cache ~p with object type ~p and instances ~p and ~p",
+               [Cache_Name, {Cache_Obj_Type, Obj_Record_Type}, Obj_Key1, Obj_Key2]),
+    ct:log("Testing new generations of cache ~p with object type ~p and instances ~p and ~p",
+           [Cache_Name, {Cache_Obj_Type, Obj_Record_Type}, Obj_Key1, Obj_Key2]),
     ok = validate_create_and_fetch(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1),
     [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
 
@@ -223,6 +219,30 @@ validate_new_generations(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1, 
     [Initial_Obj_Value1] = ets:lookup(New, Obj_Key1),
     [] = ets:lookup(New, Obj_Key2),
     [#cxy_cache_meta{fetch_count=2}] = ets:lookup(?TM, Cache_Name),
+
+    true.
+
+check_clear_and_delete(_Config) ->
+    Cache_Name = frog_cache,
+    reserve_and_create_cache(Cache_Name, frog_obj),
+    Expected_Frog = {frog, "frog-3127"},
+    [Expected_Frog, Expected_Frog, Expected_Frog]
+        = [?TM:fetch_item(Cache_Name, "frog-3127") || _N <- lists:seq(1,3)],
+    [#cxy_cache_meta{fetch_count=3, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = ets:tab2list(?TM),
+    true = Started =/= NG_Time,
+
+    true = ?TM:clear(Cache_Name),
+    [#cxy_cache_meta{fetch_count=0, started=New_Time, new_gen_time=New_Time, old_gen_time=New_Time,
+                     new_gen=New_Gen, old_gen=Old_Gen}] = ets:tab2list(?TM),
+    true = New_Time > Started andalso New_Time > NG_Time andalso New_Time > OG_Time,
+    [set,0] = [ets:info(New_Gen, Attr) || Attr <- [type, size]],
+    [set,0] = [ets:info(Old_Gen, Attr) || Attr <- [type, size]],
+
+    false = ?TM:clear(foo),
+    false = ?TM:delete(foo),
+
+    eliminate_cache(Cache_Name),
+    [0, undefined, undefined] = [ets:info(Tab, size) || Tab <- [?TM, Old_Gen, New_Gen]],
     ok.
 
 
