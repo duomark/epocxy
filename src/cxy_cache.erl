@@ -312,8 +312,7 @@ replace_check_generation_fun(Cache_Name, Fun)
 -spec refresh_item (cache_name(), cached_key(), {cached_value_vsn(), cached_value()})
                    -> cached_value() | {error, tuple()}.
 -spec get_and_clear_counts(cache_name())
-                          -> {cache_name(), gen1_hit_count(), gen2_hit_count(),
-                              refresh_count(), error_count(), miss_count()}.
+                          -> {cache_name(), proplists:proplist()}.
 
 -define(WHEN_GEN_EXISTS(__Gen_Id, __Code), ets:info(__Gen_Id, type) =:= set andalso __Code).
 
@@ -468,12 +467,17 @@ return_and_count_cache(Cache_Name, Value, Count_Type, Hit_Type_Op) ->
 %% Retrieve and reset access counters.
 get_and_clear_counts(Cache_Name) ->
     Counters      = [#cxy_cache_meta.gen1_hit_count, #cxy_cache_meta.gen2_hit_count,
-                     #cxy_cache_meta.refresh_count,  #cxy_cache_meta.error_count,
-                     #cxy_cache_meta.miss_count],
+                     #cxy_cache_meta.refresh_count,  #cxy_cache_meta.delete_count,
+                     #cxy_cache_meta.error_count,    #cxy_cache_meta.miss_count],
     Read_And_Zero = [[{Counter, 0}, {Counter, 0, 0, 0}] || Counter <- Counters],
-    [Gen1, 0, Gen2, 0, Refresh, 0, Error, 0, Miss, 0]
+    [Gen1_Hits, 0, Gen2_Hits, 0, Refresh_Count, 0, Delete_Count, 0, Error_Count, 0, Miss_Count, 0]
         = ?DO_METADATA(ets:update_counter(?MODULE, Cache_Name, lists:append(Read_And_Zero))),
-    {Cache_Name, Gen1, Gen2, Refresh, Error, Miss}.
+    {Cache_Name, [{gen1_hits,     Gen1_Hits},
+                  {gen2_hits,     Gen2_Hits},
+                  {refresh_count, Refresh_Count},
+                  {delete_count,  Delete_Count},
+                  {error_count,   Error_Count},
+                  {miss_count,    Miss_Count}]}.
 
 %% Create a new value from the cache Mod:create_key_value(Key) but watch for errors in generating it.
 create_new_value(Cache_Name, New_Gen_Id, Mod, Key) ->
