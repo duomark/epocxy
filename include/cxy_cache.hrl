@@ -6,6 +6,7 @@
           gen1_hit_count = 0              :: cxy_cache:gen1_hit_count(),
           gen2_hit_count = 0              :: cxy_cache:gen2_hit_count(),
           refresh_count  = 0              :: cxy_cache:refresh_count(),
+          delete_count   = 0              :: cxy_cache:delete_count(),
           fetch_count    = 0              :: cxy_cache:fetch_count(),
           error_count    = 0              :: cxy_cache:error_count(),
           miss_count     = 0              :: cxy_cache:miss_count(),

@@ -30,9 +30,8 @@
 -export([
          proper_check_create/1,
          vf_check_one_fetch/1, vf_check_many_fetches/1,
-         check_fsm_cache/1,
-
-         check_clear_and_delete/1
+         vd_clear_and_delete/1,
+         check_fsm_cache/1
         ]).
 
 -include("epocxy_common_test.hrl").
@@ -44,14 +43,14 @@
 all() -> [
           proper_check_create,         % Establish all atoms as valid cache names
           {group, verify_fetch},       % Tests fetching from the cache, even when empty
-          check_fsm_cache,             % Certifies the cache supervisor and FSM ets ownership
-
-          check_clear_and_delete
+          {group, verify_delete},      % Tests clearing and deleting from the cache
+          check_fsm_cache              % Certifies the cache supervisor and FSM ets ownership
          ].
 
 -spec groups() -> [{test_group(), [sequence], [test_case() | {group, test_group()}]}].
 groups() -> [
-             {verify_fetch, [sequence], [vf_check_one_fetch, vf_check_many_fetches]}
+             {verify_fetch,  [sequence], [vf_check_one_fetch, vf_check_many_fetches]},
+             {verify_delete, [sequence], [vd_clear_and_delete]}
              ].
     
 
@@ -125,8 +124,11 @@ check_create_test(Cache_Name) ->
     true.
 
 vf_check_one_fetch(_Config) ->
-    validate_create_and_fetch(frogs, frog_obj, frog, "frog-124"),
-    eliminate_cache(frogs),
+    ct:log("Test basic cache access"),
+    Cache_Name = frogs,
+    validate_create_and_fetch(Cache_Name, frog_obj, frog, "frog-124"),
+    eliminate_cache(Cache_Name),
+    ct:comment("Successfully tested basic cache access"),
     ok.
 
 vf_check_many_fetches(_Config) ->
@@ -222,25 +224,60 @@ validate_new_generations(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1, 
 
     true.
 
-check_clear_and_delete(_Config) ->
-    Cache_Name = frog_cache,
-    reserve_and_create_cache(Cache_Name, frog_obj),
-    Expected_Frog = {frog, "frog-3127"},
-    [Expected_Frog, Expected_Frog, Expected_Frog]
-        = [?TM:fetch_item(Cache_Name, "frog-3127") || _N <- lists:seq(1,3)],
-    [#cxy_cache_meta{fetch_count=3, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = ets:tab2list(?TM),
-    true = Started =/= NG_Time,
+vd_clear_and_delete(_Config) ->
+    ct:comment("Testing clear and delete of instances from a cache"),
+    validate_clear_and_delete_cache(frog_cache, frog_obj, frog, "frog-3127"),
+    ct:comment("Successfully tested clear and delete"),
+    ok.
 
+validate_clear_and_delete_cache(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Instance_Key) ->
+    %% Create cache and fetch one item...
+    reserve_and_create_cache(Cache_Name, Cache_Obj_Type),
+    Fetch1 = ets:tab2list(?TM),
+    [#cxy_cache_meta{fetch_count=0, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = Fetch1,
+    {Cache_Name, Info1} = ?TM:info(Cache_Name),
+    0 = proplists:get_value(new_gen_count, Info1),
+
+    Expected_Frog = {Obj_Record_Type, Obj_Instance_Key},
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    Fetch2 = ets:tab2list(?TM),
+    [#cxy_cache_meta{fetch_count=1, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = Fetch2,
+    {Cache_Name, Info2} = ?TM:info(Cache_Name),
+    1 = proplists:get_value(new_gen_count, Info2),
+
+    %% Delete the item and fetch it 3 more times..
+    true = ?TM:delete_item(Cache_Name, Obj_Instance_Key),
+    {Cache_Name, Info3} = ?TM:info(Cache_Name),
+    0 = proplists:get_value(new_gen_count, Info3),
+
+    [Expected_Frog, Expected_Frog, Expected_Frog]
+        = [?TM:fetch_item(Cache_Name, Obj_Instance_Key) || _N <- lists:seq(1,3)],
+    Fetch3 = ets:tab2list(?TM),
+    [#cxy_cache_meta{fetch_count=4, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = Fetch3,
+    true = Started =/= NG_Time,
+    {Cache_Name, Info4} = ?TM:info(Cache_Name),
+    1 = proplists:get_value(new_gen_count, Info4),
+
+    %% Unknown cache not accessible...
+    false = ?TM:clear(foo),
+    false = ?TM:delete(foo),
+    {foo, []} = ?TM:info(foo),
+
+    %% Clear cache and verify it has new metadata...
     true = ?TM:clear(Cache_Name),
     [#cxy_cache_meta{fetch_count=0, started=New_Time, new_gen_time=New_Time, old_gen_time=New_Time,
                      new_gen=New_Gen, old_gen=Old_Gen}] = ets:tab2list(?TM),
     true = New_Time > Started andalso New_Time > NG_Time andalso New_Time > OG_Time,
     [set,0] = [ets:info(New_Gen, Attr) || Attr <- [type, size]],
     [set,0] = [ets:info(Old_Gen, Attr) || Attr <- [type, size]],
+    {Cache_Name, Info5} = ?TM:info(Cache_Name),
+    0 = proplists:get_value(new_gen_count, Info5),
 
+    %% Unknown cache still not accessible...
     false = ?TM:clear(foo),
     false = ?TM:delete(foo),
 
+    %% Remove cache and complete test.
     eliminate_cache(Cache_Name),
     [0, undefined, undefined] = [ets:info(Tab, size) || Tab <- [?TM, Old_Gen, New_Gen]],
     ok.

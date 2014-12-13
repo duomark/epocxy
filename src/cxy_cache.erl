@@ -31,16 +31,19 @@
 -module(cxy_cache).
 -author('Jay Nelson <jay@duomark.com>').
 
--compile({inline, [return_cache_gen1/2, return_cache_gen2/2, return_cache_miss/2,
-                   return_and_count_cache/3]}).
+-compile({inline, [return_cache_gen1/2,     return_cache_gen2/2,
+                   return_cache_refresh/2,  return_cache_error/2,
+                   return_cache_miss/2,     return_cache_delete/2,
+                   return_and_count_cache/4
+                  ]}).
 
 %% External interface
 -export([
          reserve/2, reserve/3, reserve/4,
-         create/1, clear/1, delete/1,
-         info/0, info/1,
+         create/1,  clear/1,   delete/1,
+         info/0,    info/1,
          replace_check_generation_fun/2,
-         delete_item/2, fetch_item/2,
+         delete_item/2,  fetch_item/2,
          refresh_item/2, refresh_item/3,
          get_and_clear_counts/1
         ]).
@@ -75,11 +78,13 @@
 -type gen1_hit_count() :: access_count().
 -type gen2_hit_count() :: access_count().
 -type refresh_count()  :: access_count().
+-type delete_count()   :: access_count().
 -type fetch_count()    :: access_count().
 -type error_count()    :: access_count().
 -type miss_count()     :: access_count().
 
--export_type([gen1_hit_count/0, gen2_hit_count/0, refresh_count/0, fetch_count/0, error_count/0, miss_count/0]).
+-export_type([gen1_hit_count/0, gen2_hit_count/0, delete_count/0, refresh_count/0,
+              fetch_count/0, error_count/0, miss_count/0]).
 
 -include("cxy_cache.hrl").
 
@@ -204,6 +209,7 @@ fmt_info(#cxy_cache_meta{cache_name     = Cache_Name,
                          gen1_hit_count = Gen1_Hits,
                          gen2_hit_count = Gen2_Hits,
                          refresh_count  = Refresh_Count,
+                         delete_count   = Deletes,
                          fetch_count    = Fetches,
                          error_count    = Error_Count,
                          miss_count     = Miss_Count,
@@ -236,6 +242,7 @@ fmt_info(#cxy_cache_meta{cache_name     = Cache_Name,
                   {gen1_hits,     Gen1_Hits},
                   {gen2_hits,     Gen2_Hits},
                   {refresh_count, Refresh_Count},
+                  {delete_count,  Deletes},
                   {fetch_count,   Fetches},
                   {error_count,   Error_Count},
                   {miss_count,    Miss_Count},
@@ -259,6 +266,7 @@ clear(Cache_Name)
                     {#cxy_cache_meta.gen1_hit_count,  0},
                     {#cxy_cache_meta.gen2_hit_count,  0},
                     {#cxy_cache_meta.refresh_count,   0},
+                    {#cxy_cache_meta.delete_count,    0},
                     {#cxy_cache_meta.fetch_count,     0},
                     {#cxy_cache_meta.error_count,     0},
                     {#cxy_cache_meta.miss_count,      0},
@@ -311,12 +319,12 @@ replace_check_generation_fun(Cache_Name, Fun)
 
 delete_item(Cache_Name, Key) ->
     case ?GET_METADATA(Cache_Name) of
-        [] -> false;
+        [] -> return_cache_delete(Cache_Name, false);
         [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id}] ->
             %% Delete from new generation first is safest during a generation change.
-            _ = ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
-            _ = ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id, Key)),
-            true
+            Deleted_New = ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
+            Deleted_Old = ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id, Key)),
+            return_cache_delete(Cache_Name, Deleted_New or Deleted_Old)
     end.
 
 fetch_item(Cache_Name, Key) ->
@@ -435,16 +443,25 @@ cache_miss(Cache_Name, New_Gen_Id, Mod, Key) ->
     end.
 
 %% Count specific access requests for statistics reporting...
--define(INC(__Name, __Value, __Count), return_and_count_cache(__Name, __Value, __Count)).
-return_cache_gen1    (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.gen1_hit_count, 1}).
-return_cache_gen2    (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.gen2_hit_count, 1}).
-return_cache_refresh (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.refresh_count,  1}).
-return_cache_error   (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.error_count,    1}).
-return_cache_miss    (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.miss_count,     1}).
+-define(INC(__Name, __Value, __Count_Type, __Count),
+        return_and_count_cache(__Name, __Value, __Count_Type, __Count)).
+return_cache_gen1    (Cache_Name, Value) -> ?INC(Cache_Name, Value, gen1,    {#cxy_cache_meta.gen1_hit_count, 1}).
+return_cache_gen2    (Cache_Name, Value) -> ?INC(Cache_Name, Value, gen2,    {#cxy_cache_meta.gen2_hit_count, 1}).
+return_cache_refresh (Cache_Name, Value) -> ?INC(Cache_Name, Value, refresh, {#cxy_cache_meta.refresh_count,  1}).
+return_cache_error   (Cache_Name, Value) -> ?INC(Cache_Name, Value, error,   {#cxy_cache_meta.error_count,    1}).
+return_cache_miss    (Cache_Name, Value) -> ?INC(Cache_Name, Value, miss,    {#cxy_cache_meta.miss_count,     1}).
 
-%% Always count fetch requests for statistics reporting, even on time-based caches.
-return_and_count_cache(Cache_Name, Value, Hit_Type_Op) ->
-    Inc_Op = [{#cxy_cache_meta.fetch_count, 1}, Hit_Type_Op],
+%% Count whether an item was deleted.
+return_cache_delete  (Cache_Name, true ) -> ?INC(Cache_Name, true,  delete,  {#cxy_cache_meta.delete_count,   1});
+return_cache_delete  (Cache_Name, false) -> ?INC(Cache_Name, false, delete,  {#cxy_cache_meta.delete_count,   1}).
+
+%% Count fetch requests for statistics reporting, even on time-based caches, but not for refresh and delete.
+return_and_count_cache(Cache_Name, Value, Count_Type, Hit_Type_Op) ->
+    Fetch_Inc = case Count_Type of
+                    _Dont_Count_As_Fetch when Count_Type =:= refresh; Count_Type =:= delete -> [];
+                    _Count_As_Fetch -> [{#cxy_cache_meta.fetch_count, 1}]
+                end,
+    Inc_Op = [Hit_Type_Op | Fetch_Inc],
     _ = ?DO_METADATA(ets:update_counter(?MODULE, Cache_Name, Inc_Op)),
     Value.
 
