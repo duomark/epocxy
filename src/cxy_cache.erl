@@ -45,6 +45,7 @@
          replace_check_generation_fun/2,
          delete_item/2,  fetch_item/2,
          refresh_item/2, refresh_item/3,
+         fetch_item_version/2,
          get_and_clear_counts/1
         ]).
 
@@ -311,6 +312,7 @@ replace_check_generation_fun(Cache_Name, Fun)
 -spec refresh_item (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
 -spec refresh_item (cache_name(), cached_key(), {cached_value_vsn(), cached_value()})
                    -> cached_value() | {error, tuple()}.
+-spec fetch_item_version (cache_name(), cached_key()) -> cached_value_vsn() | {} | {error, tuple()}.
 -spec get_and_clear_counts(cache_name())
                           -> {cache_name(), proplists:proplist()}.
 
@@ -408,6 +410,29 @@ refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value}) ->
                           %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
                           error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
                       end
+            end
+    end.
+
+fetch_item_version(Cache_Name, Key) ->
+    case ?GET_METADATA(Cache_Name) of
+        [] -> {error, {no_cache_metadata, Cache_Name}};
+        [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id}] ->
+
+            %% Return version from newest ets table in which it resides.
+            case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
+                false ->
+                    {error, {no_gen1_cache, Cache_Name}};
+                [#cxy_cache_value{key=Key, version=Version}] ->
+                    Version;
+                [] ->
+                    case ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:lookup(Old_Gen_Id, Key)) of
+                        false ->
+                            {error, {no_gen2_cache, Cache_Name}};
+                        [#cxy_cache_value{key=Key, version=Version}] ->
+                            Version;
+                        [] ->
+                            {}
+                    end
             end
     end.
 
