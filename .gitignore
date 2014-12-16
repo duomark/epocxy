@@ -7,3 +7,4 @@ logs
 *.beam
 *.plt
 *~
+.erlang.mk.packages.*

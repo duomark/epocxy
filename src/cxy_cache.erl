@@ -12,6 +12,15 @@
 %%%   table is deleted. This is a form of mass garbage collection which
 %%%   avoids using timers and expiration of individual cached elements.
 %%%
+%%%   Cache names must be reserved before the actual cache can be created.
+%%%   This ensures that the metadata is available before the cache storage
+%%%   is available, but more importantly reserving also creates the metadata
+%%%   ets table if it doesn't already exist. Both reserve and create must
+%%%   be called from a process which will outlive any processes which will
+%%%   access the caches. Since the cached data and metadata are stored in
+%%%   ets tables, the creating process will be the owner and that process
+%%%   cannot die or the tables will be automatically deleted.
+%%%
 %%%   v0.9.8b changes the return value of Mod:create_key_value/1 to account
 %%%   for different versions of the cached value. In a race condition, the
 %%%   later version wins now instead of the first to store in the ets table.
@@ -22,16 +31,21 @@
 -module(cxy_cache).
 -author('Jay Nelson <jay@duomark.com>').
 
--compile({inline, [return_cache_gen1/2, return_cache_gen2/2, return_cache_miss/2,
-                   return_and_count_cache/3]}).
+-compile({inline, [return_cache_gen1/2,     return_cache_gen2/2,
+                   return_cache_refresh/2,  return_cache_error/2,
+                   return_cache_miss/2,     return_cache_delete/2,
+                   return_and_count_cache/4
+                  ]}).
 
 %% External interface
 -export([
          reserve/2, reserve/3, reserve/4,
-         create/1, clear/1, delete/1,
-         info/0, info/1,
+         create/1,  clear/1,   delete/1,
+         info/0,    info/1,
          replace_check_generation_fun/2,
-         delete_item/2, fetch_item/2,
+         delete_item/2,  fetch_item/2,
+         refresh_item/2, refresh_item/3,
+         fetch_item_version/2,
          get_and_clear_counts/1
         ]).
 
@@ -41,34 +55,13 @@
 %% Manual generation change functions, must be called from ets owner process.
 -export([new_generation/1, maybe_make_new_generation/1]).
 
--type cache_name()    :: atom().
--type cache_key()     :: any().
--type cache_value()   :: any().
--type thresh_type()   :: count | time.
--type gen_fun()       :: fun((cache_name(), non_neg_integer(), erlang:timestamp()) -> boolean()).
--type gen_fun_opt()   :: none | gen_fun().
--type check_gen_fun() :: gen_fun_opt() | thresh_type().
+-type cache_name()     :: atom().
+-type thresh_type()    :: count | time.
+-type gen_fun()        :: fun((cache_name(), non_neg_integer(), erlang:timestamp()) -> boolean()).
+-type gen_fun_opt()    :: none | gen_fun().
+-type check_gen_fun()  :: gen_fun_opt() | thresh_type().
 
--export_type([cache_name/0, cache_key/0, cache_value/0,
-              gen_fun/0, gen_fun_opt/0, thresh_type/0]).
-
--record(cxy_cache_meta,
-        {
-          cache_name                      :: cache_name(),
-          started        = os:timestamp() :: erlang:timestamp(),
-          fetch_count    = 0              :: non_neg_integer(),
-          gen1_hit_count = 0              :: non_neg_integer(),
-          gen2_hit_count = 0              :: non_neg_integer(),
-          miss_count     = 0              :: non_neg_integer(),
-          error_count    = 0              :: non_neg_integer(),
-          new_gen_time                    :: erlang:timestamp(),
-          old_gen_time                    :: erlang:timestamp(),
-          new_gen                         :: ets:tid(),
-          old_gen                         :: ets:tid(),
-          cache_module                    :: module(),
-          new_generation_function = none  :: check_gen_fun(),
-          new_generation_thresh   = 0     :: non_neg_integer()
-        }).
+-export_type([cache_name/0, gen_fun/0, gen_fun_opt/0, thresh_type/0, check_gen_fun/0]).
 
 %% Each cxy_cache behaviour must have a module which defines the Key => {Version, Value} function.
 -type cached_key()       :: term().
@@ -81,12 +74,20 @@
 
 -export_type([cached_key/0, cached_value/0, cached_value_vsn/0]).
 
--record(cxy_cache_value,
-        {
-          key      :: cached_key(),
-          value    :: cached_value(),
-          version  :: cached_value_vsn()
-        }).
+%% Internal counters are exported for safer metadata spelunking
+-type access_count()   :: non_neg_integer().
+-type gen1_hit_count() :: access_count().
+-type gen2_hit_count() :: access_count().
+-type refresh_count()  :: access_count().
+-type delete_count()   :: access_count().
+-type fetch_count()    :: access_count().
+-type error_count()    :: access_count().
+-type miss_count()     :: access_count().
+
+-export_type([gen1_hit_count/0, gen2_hit_count/0, delete_count/0, refresh_count/0,
+              fetch_count/0, error_count/0, miss_count/0]).
+
+-include("cxy_cache.hrl").
 
 
 %%%------------------------------------------------------------------------------
@@ -100,8 +101,8 @@
 
 -spec create(cache_name()) -> boolean().
 
--spec info()             -> proplists:proplist().
--spec info(cache_name()) -> proplists:proplist().
+-spec info()      -> [{Cache, proplists:proplist()}] when Cache :: cache_name().
+-spec info(Cache) ->  {Cache, proplists:proplist()}  when Cache :: cache_name().
 
 -spec clear  (cache_name()) -> boolean().
 -spec delete (cache_name()) -> boolean().
@@ -109,12 +110,12 @@
 
 %% Comparators available to gen_fun().
 -spec new_gen_count_threshold(cache_name(), Fetch_Count, Time, Thresh)
-                             -> boolean() when Fetch_Count :: non_neg_integer(),
+                             -> boolean() when Fetch_Count :: fetch_count(),
                                                Time        :: erlang:timestamp(),
                                                Thresh      :: non_neg_integer().
 
 -spec new_gen_time_threshold(cache_name(), Fetch_Count, Time, Thresh)
-                            -> boolean() when Fetch_Count :: non_neg_integer(),
+                            -> boolean() when Fetch_Count :: fetch_count(),
                                               Time        :: erlang:timestamp(),
                                               Thresh      :: non_neg_integer().
 
@@ -200,39 +201,54 @@ info() ->
 info(Cache_Name)
   when is_atom(Cache_Name) ->
     case ?GET_METADATA(Cache_Name) of
-        [] -> [];
+        [] -> {Cache_Name, []};
         [#cxy_cache_meta{} = Metadata] -> fmt_info(Metadata)
     end.
 
 fmt_info(#cxy_cache_meta{cache_name     = Cache_Name,
-                         cache_module   = Cache_Mod,
                          started        = Started,
-                         fetch_count    = Fetches,
-                         new_gen_time   = New_Time, new_gen = New,
-                         old_gen_time   = Old_Time, old_gen = Old,
                          gen1_hit_count = Gen1_Hits,
                          gen2_hit_count = Gen2_Hits,
-                         miss_count     = Miss_Count,
+                         refresh_count  = Refresh_Count,
+                         delete_count   = Deletes,
+                         fetch_count    = Fetches,
                          error_count    = Error_Count,
+                         miss_count     = Miss_Count,
+                         new_gen_time   = New_Time, new_gen = New,
+                         old_gen_time   = Old_Time, old_gen = Old,
+                         cache_module   = Cache_Mod,
                          new_generation_function = NGF,
                          new_generation_thresh   = NGT
                         }) ->
     Now = os:timestamp(),
-    New_Time_Diff = round(timer:now_diff(Now, New_Time) / 10000 / 60) / 100,
-    Old_Time_Diff = round(timer:now_diff(Now, Old_Time) / 10000 / 60) / 100,
+    New_Time_Diff = case New_Time of
+                        undefined -> undefined;
+                        New_Time  -> round(timer:now_diff(Now, New_Time) / 10000 / 60) / 100
+                    end,
+    Old_Time_Diff = case Old_Time of
+                        undefined -> undefined;
+                        Old_Time  -> round(timer:now_diff(Now, Old_Time) / 10000 / 60) / 100
+                    end,
     [[New_Count, New_Memory], [Old_Count, Old_Memory]]
-        = [[ets:info(Tab, Attr) || Attr <- [size, memory]]
-           || Tab <- [New, Old]],
+        = [case Tab of
+               undefined -> [0, 0];
+               _Table_Id -> [ets:info(Tab, Attr) || Attr <- [size, memory]]
+           end || Tab <- [New, Old]],
 
     %% Fetch count reflects the next request count, so we decrement by 1.
     {Cache_Name, [
-                  {started,      Started},
-                  {cache_module, Cache_Mod},
-                  {total_memory, New_Memory + Old_Memory},
-                  {gen1_hits,    Gen1_Hits},
-                  {gen2_hits,    Gen2_Hits},
-                  {miss_count,   Miss_Count},
-                  {error_count,  Error_Count},
+                  {started,       Started},
+                  {cache_module,  Cache_Mod},
+                  {total_memory,  New_Memory + Old_Memory},
+                  {gen1_hits,     Gen1_Hits},
+                  {gen2_hits,     Gen2_Hits},
+                  {refresh_count, Refresh_Count},
+                  {delete_count,  Deletes},
+                  {fetch_count,   Fetches},
+                  {error_count,   Error_Count},
+                  {miss_count,    Miss_Count},
+                  {new_gen_tid,   New},
+                  {old_gen_tid,   Old},
                   {new_generation_thresh,        NGT},
                   {new_generation_function,      NGF},
                   {num_accesses_this_generation, Fetches},
@@ -248,11 +264,13 @@ clear(Cache_Name)
     %% Prep locals before accessing metadata to narrow concurrency race window...
     New_Timestamp = os:timestamp(),
     New_Metadata = [{#cxy_cache_meta.started,      New_Timestamp},
-                    {#cxy_cache_meta.fetch_count,     0},
                     {#cxy_cache_meta.gen1_hit_count,  0},
                     {#cxy_cache_meta.gen2_hit_count,  0},
-                    {#cxy_cache_meta.miss_count,      0},
+                    {#cxy_cache_meta.refresh_count,   0},
+                    {#cxy_cache_meta.delete_count,    0},
+                    {#cxy_cache_meta.fetch_count,     0},
                     {#cxy_cache_meta.error_count,     0},
+                    {#cxy_cache_meta.miss_count,      0},
                     {#cxy_cache_meta.new_gen_time, New_Timestamp},
                     {#cxy_cache_meta.old_gen_time, New_Timestamp}],
 
@@ -289,44 +307,124 @@ replace_check_generation_fun(Cache_Name, Fun)
 %%% Generational caches are accessed via the meta-data, newest first.
 %%%------------------------------------------------------------------------------
 
--type gen1_hit_count() :: non_neg_integer().
--type gen2_hit_count() :: non_neg_integer().
--type error_count()    :: non_neg_integer().
--type miss_count()     :: non_neg_integer().
-
--spec delete_item (cache_name(), cache_key()) -> true.
--spec fetch_item  (cache_name(), cache_key()) -> cache_value() | {error, tuple()}.
+-spec delete_item  (cache_name(), cached_key()) -> true.
+-spec fetch_item   (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
+-spec refresh_item (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
+-spec refresh_item (cache_name(), cached_key(), {cached_value_vsn(), cached_value()})
+                   -> cached_value() | {error, tuple()}.
+-spec fetch_item_version (cache_name(), cached_key()) -> cached_value_vsn() | {} | {error, tuple()}.
 -spec get_and_clear_counts(cache_name())
-                          -> {cache_name(), gen1_hit_count(), gen2_hit_count(),
-                              miss_count(), error_count()}.
+                          -> {cache_name(), proplists:proplist()}.
 
 -define(WHEN_GEN_EXISTS(__Gen_Id, __Code), ets:info(__Gen_Id, type) =:= set andalso __Code).
 
+%% Remove an item from both new and old generations, returns true if at least one value was deleted.
 delete_item(Cache_Name, Key) ->
     case ?GET_METADATA(Cache_Name) of
-        [] -> false;
+        [] -> return_cache_delete(Cache_Name, false);
         [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id}] ->
             %% Delete from new generation first is safest during a generation change.
-            _ = ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
-            _ = ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id, Key)),
-            true
+            Deleted_New = ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
+            Deleted_Old = ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id, Key)),
+            return_cache_delete(Cache_Name, Deleted_New or Deleted_Old)
     end.
 
-fetch_item(Cache_Name, Key) ->
+%% Internal support function for consistent error handling when accessing generations.
+%% Used for fetch_item/2, refresh_item/2, and refresh_item/3
+access_item(Cache_Name, Key, Found_Gen1_Fn, Look_Gen2_Fn, Optional_Object) ->
     case ?GET_METADATA(Cache_Name) of
         [] -> {error, {no_cache_metadata, Cache_Name}};
         [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id, cache_module=Mod}] ->
             case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
-                false ->
-                    {error, {no_gen1_cache, Cache_Name}};
 
-                %% Return immediately if found in the new generational cache...
-                [#cxy_cache_value{key=Key, value=Value}] ->
-                    return_cache_gen1(Cache_Name, Value);
+                %% Gen1 cache is missing, there is an error...
+                false -> {error, {no_gen1_cache, Cache_Name}};
+
+                %% Found in the new generational cache...
+                [#cxy_cache_value{key=Key, value=Value, version=Vsn}] ->
+                    Found_Gen1_Fn(Cache_Name, Value, Vsn, New_Gen_Id, Mod, Key);
 
                 %% Otherwise migrate the old generation cached value or create a new cached value.
-                [] -> copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Key, Mod)
+                [] -> Look_Gen2_Fn(Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Optional_Object)
             end
+    end.
+
+%% Fetch from Generation 1, migrate from Generation 2, or create a new value and insert to Generation 1.
+fetch_item(Cache_Name, Key) ->
+    Found_Fn     = fun(Fn_Cache_Name, Fn_Value, _Version, _New_Gen_Id, _Mod, _Key) ->
+                           return_cache_gen1(Fn_Cache_Name, Fn_Value)
+                   end,
+    Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, _Object) ->
+                           copy_old_value_if_found(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
+
+%% Fetch from Generation 1 or 2, after updating with a newer key version or leaving existing newest key version.
+refresh_item(Cache_Name, Key) ->
+    Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
+                           Fn_New_Cached_Value = create_new_value(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key),
+                           return_cache_refresh(Fn_Cache_Name, Fn_New_Cached_Value)
+                   end,
+    Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
+                           refresh_item(key, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
+
+%% Fetch from Generation 1 or 2, after updating with a newer obj version or leaving existing newest obj version.
+refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value} = Possibly_New_Object) ->
+    Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
+                           New_Cached_Value = insert_value_if_newer(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key,
+                                                                    Possibly_New_Vsn, Possibly_New_Value),
+                           return_cache_refresh(Cache_Name, New_Cached_Value)
+                      end,
+    Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
+                           refresh_item(obj, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod,Fn_Key,Fn_Obj)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, Possibly_New_Object).
+
+%% Fetch just the version of an item from the newest generation in which it is present without migrating.
+fetch_item_version(Cache_Name, Key) ->
+    Found_Fn     = fun(_Cache_Name, _Value, Version, _New_Gen_Id, _Mod, _Key) -> Version end,
+    Not_Found_Fn = fun(Fn_Cache_Name, _New_Gen_Id, Fn_Old_Gen_Id, _Mod, Fn_Key, _Obj) ->
+                           fetch_gen2_version(Fn_Cache_Name, Fn_Old_Gen_Id, Fn_Key)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
+
+%% Old generation function for getting just the version of a cached value entry.
+fetch_gen2_version(Cache_Name, Old_Gen_Id, Key) ->
+    case ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:lookup(Old_Gen_Id, Key)) of
+        false ->
+            {error, {no_gen2_cache, Cache_Name}};
+        [#cxy_cache_value{key=Key, version=Version}] ->
+            Version;
+        [] ->
+            {}
+    end.
+
+%% Migrate an old value forward to the new generation and then clobber
+%% if the key generates a newer version. Otherwise leave the existing
+%% version in place.
+refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Object) ->
+    try ets:lookup(Old_Gen_Id, Key) of
+
+        %% Create a new Mod:create_key_value value if not in old generation...
+        [] -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
+
+        %% Otherwise, migrate the old value to the new generation...
+        [#cxy_cache_value{key=Key} = Old_Obj] ->
+            insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
+            %% Then try to clobber it with a newly created value.
+            Cached_Value = case Type of
+                               key -> create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
+                               obj -> {Possibly_New_Vsn, Possibly_New_Value} = Object,
+                                      insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
+                                                            Key, Possibly_New_Vsn, Possibly_New_Value)
+                           end,
+            return_cache_refresh(Cache_Name, Cached_Value)
+    catch
+        %% Old generation was likely eliminated by another request, try creating a new value.
+        %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
+        error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
     end.
 
 %% Copy needs to be as close to atomic as possible. Values are now tagged
@@ -336,11 +434,11 @@ fetch_item(Cache_Name, Key) ->
 %% out from under us. In this case, we pretend the key doesn't exist and
 %% create a new one. At worst, we are the only user of this new value
 %% or the next access copies it to the empty generation.
-copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Key, Mod) ->
+copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key) ->
     try ets:lookup(Old_Gen_Id, Key) of
 
         %% Create a new Mod:create_key_value value if not in old generation...
-        [] -> create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
+        [] -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
 
         %% Otherwise, insert the value to the new generation...
         [#cxy_cache_value{key=Key, value=Value} = Obj] ->
@@ -349,41 +447,66 @@ copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Key, Mod) ->
     catch
         %% Old generation was probably eliminated by another request, try creating a new value.
         %% Note the value will actually get inserted into 'old_gen' because New_Gen_Id must've been demoted.
-        error:badarg -> create_new_value(Cache_Name, New_Gen_Id, Mod, Key)
+        error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
     end.
 
-%% Always count fetch requests for statistics reporting, even on time-based caches...
--define(INC(__Name, __Value, __Count), return_and_count_cache(__Name, __Value, __Count)).
-return_cache_gen1  (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.gen1_hit_count, 1}).
-return_cache_gen2  (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.gen2_hit_count, 1}).
-return_cache_miss  (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.miss_count,     1}).
-return_cache_error (Cache_Name, Value) -> ?INC(Cache_Name, Value, {#cxy_cache_meta.error_count,    1}).
+cache_miss(Cache_Name, New_Gen_Id, Mod, Key) ->
+    case create_new_value(Cache_Name, New_Gen_Id, Mod, Key) of
+        {error, _} = Error -> Error;
+        Cached_Value       -> return_cache_miss(Cache_Name, Cached_Value)
+    end.
 
-return_and_count_cache(Cache_Name, Value, Hit_Type_Op) ->
-    Inc_Op = [{#cxy_cache_meta.fetch_count, 1}, Hit_Type_Op],
+%% Count specific access requests for statistics reporting...
+-define(INC(__Name, __Value, __Count_Type, __Count),
+        return_and_count_cache(__Name, __Value, __Count_Type, __Count)).
+return_cache_gen1    (Cache_Name, Value) -> ?INC(Cache_Name, Value, gen1,    {#cxy_cache_meta.gen1_hit_count, 1}).
+return_cache_gen2    (Cache_Name, Value) -> ?INC(Cache_Name, Value, gen2,    {#cxy_cache_meta.gen2_hit_count, 1}).
+return_cache_refresh (Cache_Name, Value) -> ?INC(Cache_Name, Value, refresh, {#cxy_cache_meta.refresh_count,  1}).
+return_cache_error   (Cache_Name, Value) -> ?INC(Cache_Name, Value, error,   {#cxy_cache_meta.error_count,    1}).
+return_cache_miss    (Cache_Name, Value) -> ?INC(Cache_Name, Value, miss,    {#cxy_cache_meta.miss_count,     1}).
+
+%% Count whether an item was deleted.
+return_cache_delete  (Cache_Name, true ) -> ?INC(Cache_Name, true,  delete,  {#cxy_cache_meta.delete_count,   1});
+return_cache_delete  (Cache_Name, false) -> ?INC(Cache_Name, false, delete,  {#cxy_cache_meta.delete_count,   0}).
+
+%% Count fetch requests for statistics reporting, even on time-based caches, but not for refresh and delete.
+return_and_count_cache(Cache_Name, Value, Count_Type, Hit_Type_Op) ->
+    Fetch_Inc = case Count_Type of
+                    _Dont_Count_As_Fetch when Count_Type =:= refresh; Count_Type =:= delete -> [];
+                    _Count_As_Fetch -> [{#cxy_cache_meta.fetch_count, 1}]
+                end,
+    Inc_Op = [Hit_Type_Op | Fetch_Inc],
     _ = ?DO_METADATA(ets:update_counter(?MODULE, Cache_Name, Inc_Op)),
     Value.
 
 %% Retrieve and reset access counters.
 get_and_clear_counts(Cache_Name) ->
     Counters      = [#cxy_cache_meta.gen1_hit_count, #cxy_cache_meta.gen2_hit_count,
-                     #cxy_cache_meta.miss_count,     #cxy_cache_meta.error_count],
+                     #cxy_cache_meta.refresh_count,  #cxy_cache_meta.delete_count,
+                     #cxy_cache_meta.error_count,    #cxy_cache_meta.miss_count],
     Read_And_Zero = [[{Counter, 0}, {Counter, 0, 0, 0}] || Counter <- Counters],
-    [Gen1, 0, Gen2, 0, Miss, 0, Error, 0]
+    [Gen1_Hits, 0, Gen2_Hits, 0, Refresh_Count, 0, Delete_Count, 0, Error_Count, 0, Miss_Count, 0]
         = ?DO_METADATA(ets:update_counter(?MODULE, Cache_Name, lists:append(Read_And_Zero))),
-    {Cache_Name, Gen1, Gen2, Miss, Error}.
+    {Cache_Name, [{gen1_hits,     Gen1_Hits},
+                  {gen2_hits,     Gen2_Hits},
+                  {refresh_count, Refresh_Count},
+                  {delete_count,  Delete_Count},
+                  {error_count,   Error_Count},
+                  {miss_count,    Miss_Count}]}.
 
 %% Create a new value from the cache Mod:create_key_value(Key) but watch for errors in generating it.
 create_new_value(Cache_Name, New_Gen_Id, Mod, Key) ->
     try Mod:create_key_value(Key) of
         {Version, Value} ->
-            Tagged_Value = #cxy_cache_value{key=Key, version=Version, value=Value},
-            Cached_Value = insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Tagged_Value),
-            return_cache_miss(Cache_Name, Cached_Value)
+            insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value)
     catch Type:Class ->
             Error = {error, {Type,Class, {creating_new_value_with, Mod, Key}}},
             return_cache_error(Cache_Name, Error)
     end.
+
+insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value) ->
+    Tagged_Value = #cxy_cache_value{key=Key, version=Version, value=Value},
+    insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Tagged_Value).
 
 %% Insert the new value, IFF a newer version of the data hasn't already beat us to the cache.
 insert_to_new_gen(Cache_Name, New_Gen_Id, Mod,
@@ -424,7 +547,13 @@ determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) ->
 %%%
 %%% These functions must be called by the process that will own the generational
 %%% ets tables. The owning process has to stick around longer than the generation
-%%% lasts, or the exit of the owner will destroy the ets table prematurely.
+%%% lasts, or the exit of the owner will destroy the ets table prematurely. This
+%%% should be the same process which reserves the cache names and creates the
+%%% caches originally for consistency. This is usually achieved by configuration
+%%% data that is read and applied on startup using a dedicated supervisor and/or
+%%% gen_fsm for managing the state of caching and all the ets tables. This
+%%% library provides cxy_cache_sup and cxy_cache_fsm for exactly that purpose.
+%%% cxy_cache_fsm serves as an external signal for new generation notification.
 %%%------------------------------------------------------------------------------
 
 -spec new_generation            (cache_name()) -> ets:tid() | {error, {no_cache_metadata, cache_name()}}.
