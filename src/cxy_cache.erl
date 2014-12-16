@@ -404,7 +404,7 @@ fetch_gen2_version(Cache_Name, Old_Gen_Id, Key) ->
 %% Migrate an old value forward to the new generation and then clobber
 %% if the key generates a newer version. Otherwise leave the existing
 %% version in place.
-refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, {Possibly_New_Vsn, Possibly_New_Value} = _Obj) ->
+refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Object) ->
     try ets:lookup(Old_Gen_Id, Key) of
 
         %% Create a new Mod:create_key_value value if not in old generation...
@@ -416,7 +416,8 @@ refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, {Possibly_New_V
             %% Then try to clobber it with a newly created value.
             Cached_Value = case Type of
                                key -> create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
-                               obj -> insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
+                               obj -> {Possibly_New_Vsn, Possibly_New_Value} = Object,
+                                      insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
                                                             Key, Possibly_New_Vsn, Possibly_New_Value)
                            end,
             return_cache_refresh(Cache_Name, Cached_Value)
@@ -466,7 +467,7 @@ return_cache_miss    (Cache_Name, Value) -> ?INC(Cache_Name, Value, miss,    {#c
 
 %% Count whether an item was deleted.
 return_cache_delete  (Cache_Name, true ) -> ?INC(Cache_Name, true,  delete,  {#cxy_cache_meta.delete_count,   1});
-return_cache_delete  (Cache_Name, false) -> ?INC(Cache_Name, false, delete,  {#cxy_cache_meta.delete_count,   1}).
+return_cache_delete  (Cache_Name, false) -> ?INC(Cache_Name, false, delete,  {#cxy_cache_meta.delete_count,   0}).
 
 %% Count fetch requests for statistics reporting, even on time-based caches, but not for refresh and delete.
 return_and_count_cache(Cache_Name, Value, Count_Type, Hit_Type_Op) ->

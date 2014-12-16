@@ -139,7 +139,7 @@ vf_check_one_fetch(_Config) ->
     ok.
 
 validate_create_and_fetch(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Instance_Key) ->
-    reserve_and_create_cache(Cache_Name, Cache_Obj_Type),
+    reserve_and_create_cache(Cache_Name, Cache_Obj_Type, 5),
     [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
 
     %% First time creates new value (fetch_count always indicates next access count)...
@@ -247,7 +247,7 @@ validate_clear_and_delete_cache(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj
     
     %% Create cache and fetch one item...
     ct:comment("Put a single item into new cache: ~p", [Cache_Name]),
-    reserve_and_create_cache(Cache_Name, Cache_Obj_Type),
+    reserve_and_create_cache(Cache_Name, Cache_Obj_Type, 5),
     Fetch1 = ets:tab2list(?TM),
     [#cxy_cache_meta{fetch_count=0, started=Started, new_gen_time=NG_Time, old_gen_time=OG_Time}] = Fetch1,
     {Cache_Name, Info1} = ?TM:info(Cache_Name),
@@ -319,56 +319,86 @@ validate_clear_and_delete_cache(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj
 
 vr_force_obj_refresh(_Config) ->
     ct:comment("Testing refresh of an object instance in a cache"),
-    validate_force_refresh(obj, frog_cache, frog_obj, frog, "frog-with-spots"),
+    
+    %% Create cache and fetch one item...
+    Cache_Name     = frog_cache,
+    Cache_Obj_Type = frog_obj,
+    ct:comment("Put a single item into new cache: ~p", [Cache_Name]),
+    reserve_and_create_cache(Cache_Name, Cache_Obj_Type, 3),
+    validate_force_refresh(obj, Cache_Name, frog, "frog-with-spots", erlang:now()),
+
+    %% Remove cache and complete test.
+    eliminate_cache(Cache_Name),
     ct:comment("Successfully tested fetch_item_version for objects"),
     ok.
 
 vr_force_key_refresh(_Config) ->
     ct:comment("Testing refresh of a key instance in a cache"),
-    validate_force_refresh(key, frog_cache, frog_obj, frog, "frog-with-spots"),
+    
+    %% Create cache and fetch one item...
+    Cache_Name     = frog_cache,
+    Cache_Obj_Type = frog_obj,
+    ct:comment("Put a single item into new cache: ~p", [Cache_Name]),
+    reserve_and_create_cache(Cache_Name, Cache_Obj_Type, 3),
+    validate_force_refresh(key, Cache_Name, frog, "frog-without-spots", erlang:now()),
+
+    %% Remove cache and complete test.
+    eliminate_cache(Cache_Name),
     ct:comment("Successfully tested fetch_item_version for keys"),
     ok.
 
-validate_force_refresh(Type, Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Instance_Key) ->
-    
-    %% Create cache and fetch one item...
-    ct:comment("Put a single item into new cache: ~p", [Cache_Name]),
-    Old_Time = erlang:now(),
-    reserve_and_create_cache(Cache_Name, Cache_Obj_Type),
+validate_force_refresh(Type, Cache_Name, Obj_Record_Type, Obj_Instance_Key, Old_Time) ->
     Expected_Frog  = {Obj_Record_Type, Obj_Instance_Key},
     Expected_Frog  = ?TM:fetch_item         (Cache_Name, Obj_Instance_Key),
     Frog_Version_1 = ?TM:fetch_item_version (Cache_Name, Obj_Instance_Key),
-    true = Frog_Version_1 > Old_Time,
+    true = timer:now_diff(Frog_Version_1, Old_Time) > 0,
 
     %% Now refresh it to a newer version...
     ct:comment("Refreshing to a newer version in cache: ~p", [Cache_Name]),
     New_Time      = erlang:now(),
-    true          = New_Time > Frog_Version_1,
-    Expected_Frog = case Type of
-                        key -> ?TM:refresh_item (Cache_Name, Obj_Instance_Key);
-                        obj -> ?TM:refresh_item (Cache_Name, Obj_Instance_Key, {New_Time, Expected_Frog})
-                    end,
-    Expected_Frog = ?TM:fetch_item         (Cache_Name, Obj_Instance_Key),
-    true = case Type of
-               key -> New_Time  <  ?TM:fetch_item_version (Cache_Name, Obj_Instance_Key);
-               obj -> New_Time =:= ?TM:fetch_item_version (Cache_Name, Obj_Instance_Key)
-           end,
+    true          = timer:now_diff(New_Time, Frog_Version_1) > 0,
+    Expected_Frog = refresh(Type, Cache_Name, Obj_Instance_Key, {New_Time, Expected_Frog}),
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    true = check_version(Type, Cache_Name, Obj_Instance_Key, New_Time),
 
     %% Then check that refreshing to an older version has no effect.
     ct:comment("Refreshing to an older version in cache: ~p", [Cache_Name]),
-    Expected_Frog = case Type of
-                        key -> ?TM:refresh_item(Cache_Name, Obj_Instance_Key);
-                        obj -> ?TM:refresh_item(Cache_Name, Obj_Instance_Key, {Old_Time, Expected_Frog})
-                    end,
-    Expected_Frog = ?TM:fetch_item         (Cache_Name, Obj_Instance_Key),
-    true = case Type of
-               key -> New_Time  <  ?TM:fetch_item_version (Cache_Name, Obj_Instance_Key);
-               obj -> New_Time =:= ?TM:fetch_item_version (Cache_Name, Obj_Instance_Key)
-           end,
+    Expected_Frog = refresh(Type, Cache_Name, Obj_Instance_Key, {Old_Time, Expected_Frog}),
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    true = check_version(Type, Cache_Name, Obj_Instance_Key, New_Time),
 
-    %% Remove cache and complete test.
-    eliminate_cache(Cache_Name),
+    %% Now test the old generation with refresh...
+    ct:comment("Create a new generation for cache: ~p", [Cache_Name]),
+    {} = ?TM:fetch_item_version(Cache_Name, missing_object),
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    true = ?TM:maybe_make_new_generation(Cache_Name),
+    true = check_version(Type, Cache_Name, Obj_Instance_Key, New_Time),
+    {} = ?TM:fetch_item_version(Cache_Name, missing_object),
+
+    %% Refresh the old generation item...
+    Expected_Frog = refresh(Type, Cache_Name, Obj_Instance_Key, {Old_Time, Expected_Frog}),
+    true = check_version(Type, Cache_Name, Obj_Instance_Key, New_Time),
+
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
+    true = ?TM:maybe_make_new_generation(Cache_Name),
+    Newer_Time = erlang:now(),
+    Expected_Frog = refresh(Type, Cache_Name, Obj_Instance_Key, {Newer_Time, Expected_Frog}),
+    true = check_version(Type, Cache_Name, Obj_Instance_Key, Newer_Time),
+    
     ok.
+
+refresh(key, Cache_Name, Obj_Instance_Key, _Object) ->
+    ?TM:refresh_item(Cache_Name, Obj_Instance_Key);
+refresh(obj, Cache_Name, Obj_Instance_Key, Object) ->
+    ?TM:refresh_item(Cache_Name, Obj_Instance_Key, Object).
+
+check_version(key, Cache_Name, Obj_Instance_Key, New_Time) ->
+    timer:now_diff(New_Time, ?TM:fetch_item_version (Cache_Name, Obj_Instance_Key))  <  0;
+check_version(obj, Cache_Name, Obj_Instance_Key, New_Time) ->
+    timer:now_diff(New_Time, ?TM:fetch_item_version (Cache_Name, Obj_Instance_Key)) =:= 0.
 
 
 %%%------------------------------------------------------------------------------
@@ -429,10 +459,10 @@ gen_count_fun (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_count_threshold 
 %%gen_time_fun  (Thresh) -> fun(Name, Count, Time) -> ?TM:new_gen_time_threshold  (Name, Count, Time, Thresh) end.
 
 %% Create a new cache (each testcase creates the ets metadata table on first reserve call).
-%% Generation logic is to create a new generation every 5 fetches.
-reserve_and_create_cache(Cache_Name, Cache_Obj) ->
+%% Generation logic is to create a new generation every Gen_Count fetches.
+reserve_and_create_cache(Cache_Name, Cache_Obj, Gen_Count) ->
 %%    undefined = ets:info(?TM, named_table),
-    Gen_Fun = gen_count_fun(5),
+    Gen_Fun = gen_count_fun(Gen_Count),
     Cache_Name = ?TM:reserve(Cache_Name, Cache_Obj, Gen_Fun),
     true = validate_cache_metatable(Cache_Name, Cache_Obj, Gen_Fun),
     true = ?TM:create(Cache_Name),
