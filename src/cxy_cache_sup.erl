@@ -35,11 +35,11 @@
 %% ===================================================================
 
 -spec start_link() -> {ok, pid()}.
--spec start_cache(cyx_cache:cache_name(), module())                      -> {ok, pid()}.
--spec start_cache(cyx_cache:cache_name(), module(), pos_integer())       -> {ok, pid()};
-                 (cyx_cache:cache_name(), module(), cxy_cache:gen_fun()) -> {ok, pid()}.
+-spec start_cache(cxy_cache:cache_name(), module())                      -> {ok, pid()}.
+-spec start_cache(cxy_cache:cache_name(), module(), pos_integer())       -> {ok, pid()};
+                 (cxy_cache:cache_name(), module(), cxy_cache:gen_fun()) -> {ok, pid()}.
 
--spec start_cache(cyx_cache:cache_name(), module(), cxy_cache:thresh_type(), pos_integer()) -> {ok, pid()}.
+-spec start_cache(cxy_cache:cache_name(), module(), cxy_cache:thresh_type(), pos_integer()) -> {ok, pid()}.
 
 %% start_link creates the single metadata supervisor for all caches.
 %% start_cache creates an instance of a cache as a child of this supervisor.

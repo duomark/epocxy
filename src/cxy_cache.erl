@@ -318,6 +318,7 @@ replace_check_generation_fun(Cache_Name, Fun)
 
 -define(WHEN_GEN_EXISTS(__Gen_Id, __Code), ets:info(__Gen_Id, type) =:= set andalso __Code).
 
+%% Remove an item from both new and old generations, returns true if at least one value was deleted.
 delete_item(Cache_Name, Key) ->
     case ?GET_METADATA(Cache_Name) of
         [] -> return_cache_delete(Cache_Name, false);
@@ -328,114 +329,102 @@ delete_item(Cache_Name, Key) ->
             return_cache_delete(Cache_Name, Deleted_New or Deleted_Old)
     end.
 
+%% Internal support function for consistent error handling when accessing generations.
+%% Used for fetch_item/2, refresh_item/2, and refresh_item/3
+access_item(Cache_Name, Key, Found_Gen1_Fn, Look_Gen2_Fn, Optional_Object) ->
+    case ?GET_METADATA(Cache_Name) of
+        [] -> {error, {no_cache_metadata, Cache_Name}};
+        [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id, cache_module=Mod}] ->
+            case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
+
+                %% Gen1 cache is missing, there is an error...
+                false -> {error, {no_gen1_cache, Cache_Name}};
+
+                %% Found in the new generational cache...
+                [#cxy_cache_value{key=Key, value=Value, version=Vsn}] ->
+                    Found_Gen1_Fn(Cache_Name, Value, Vsn, New_Gen_Id, Mod, Key);
+
+                %% Otherwise migrate the old generation cached value or create a new cached value.
+                [] -> Look_Gen2_Fn(Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Optional_Object)
+            end
+    end.
+
+%% Fetch from Generation 1, migrate from Generation 2, or create a new value and insert to Generation 1.
 fetch_item(Cache_Name, Key) ->
-    case ?GET_METADATA(Cache_Name) of
-        [] -> {error, {no_cache_metadata, Cache_Name}};
-        [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id, cache_module=Mod}] ->
-            case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
-                false -> {error, {no_gen1_cache, Cache_Name}};
+    Found_Fn     = fun(Fn_Cache_Name, Fn_Value, _Version, _New_Gen_Id, _Mod, _Key) ->
+                           return_cache_gen1(Fn_Cache_Name, Fn_Value)
+                   end,
+    Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, _Object) ->
+                           copy_old_value_if_found(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
 
-                %% Return immediately if found in the new generational cache...
-                [#cxy_cache_value{key=Key, value=Value}] ->
-                    return_cache_gen1(Cache_Name, Value);
-
-                %% Otherwise migrate the old generation cached value or create a new cached value.
-                [] -> copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Key, Mod)
-            end
-    end.
-
+%% Fetch from Generation 1 or 2, after updating with a newer key version or leaving existing newest key version.
 refresh_item(Cache_Name, Key) ->
-    case ?GET_METADATA(Cache_Name) of
-        [] -> {error, {no_cache_metadata, Cache_Name}};
-        [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id, cache_module=Mod}] ->
-            
-            case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
-                false -> {error, {no_gen1_cache, Cache_Name}};
+    Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
+                           Fn_New_Cached_Value = create_new_value(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key),
+                           return_cache_refresh(Fn_Cache_Name, Fn_New_Cached_Value)
+                   end,
+    Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
+                           refresh_item(key, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
 
-                %% Maybe replace if found in the new generation cache...
-                [#cxy_cache_value{key=Key}] ->
-                    New_Cached_Value = create_new_value(Cache_Name, New_Gen_Id, Mod, Key),
-                    return_cache_refresh(Cache_Name, New_Cached_Value);
+%% Fetch from Generation 1 or 2, after updating with a newer obj version or leaving existing newest obj version.
+refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value} = Possibly_New_Object) ->
+    Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
+                           New_Cached_Value = insert_value_if_newer(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key,
+                                                                    Possibly_New_Vsn, Possibly_New_Value),
+                           return_cache_refresh(Cache_Name, New_Cached_Value)
+                      end,
+    Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
+                           refresh_item(obj, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod,Fn_Key,Fn_Obj)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, Possibly_New_Object).
 
-                %% Otherwise migrate the old generation cached value or create a new cached value.
-                [] -> try ets:lookup(Old_Gen_Id, Key) of
-
-                          %% Create a new Mod:create_key_value value if not in old generation...
-                          [] -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
-
-                          %% Otherwise, migrate the old value to the new generation...
-                          [#cxy_cache_value{key=Key} = Old_Obj] ->
-                              insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
-                              %% Then try to clobber it with a newly created value.
-                              Cached_Value = create_new_value(Cache_Name, New_Gen_Id, Mod, Key),
-                              return_cache_refresh(Cache_Name, Cached_Value)
-                      catch
-                          %% Old generation was likely eliminated by another request, try creating a new value.
-                          %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
-                          error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
-                      end
-            end
-    end.
-
-refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value}) ->
-    case ?GET_METADATA(Cache_Name) of
-        [] -> {error, {no_cache_metadata, Cache_Name}};
-        [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id, cache_module=Mod}] ->
-            
-            case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
-                false -> {error, {no_gen1_cache, Cache_Name}};
-
-                %% Maybe replace if found in the new generation cache...
-                [#cxy_cache_value{key=Key}] ->
-                    New_Cached_Value
-                        = insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
-                                                Key, Possibly_New_Vsn, Possibly_New_Value),
-                    return_cache_refresh(Cache_Name, New_Cached_Value);
-
-                %% Otherwise migrate the old generation cached value or create a new cached value.
-                [] -> try ets:lookup(Old_Gen_Id, Key) of
-
-                          %% Create a new Mod:create_key_value value if not in old generation...
-                          [] -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
-
-                          %% Otherwise, migrate the old value to the new generation...
-                          [#cxy_cache_value{key=Key} = Old_Obj] ->
-                              insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
-                              %% Then try to clobber it with the passed in new value.
-                              Cached_Value = insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
-                                                                   Key, Possibly_New_Vsn, Possibly_New_Value),
-                              return_cache_refresh(Cache_Name, Cached_Value)
-                      catch
-                          %% Old generation was likely eliminated by another request, try creating a new value.
-                          %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
-                          error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
-                      end
-            end
-    end.
-
+%% Fetch just the version of an item from the newest generation in which it is present without migrating.
 fetch_item_version(Cache_Name, Key) ->
-    case ?GET_METADATA(Cache_Name) of
-        [] -> {error, {no_cache_metadata, Cache_Name}};
-        [#cxy_cache_meta{new_gen=New_Gen_Id, old_gen=Old_Gen_Id}] ->
+    Found_Fn     = fun(_Cache_Name, _Value, Version, _New_Gen_Id, _Mod, _Key) -> Version end,
+    Not_Found_Fn = fun(Fn_Cache_Name, _New_Gen_Id, Fn_Old_Gen_Id, _Mod, Fn_Key, _Obj) ->
+                           fetch_gen2_version(Fn_Cache_Name, Fn_Old_Gen_Id, Fn_Key)
+                   end,
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
 
-            %% Return version from newest ets table in which it resides.
-            case ?WHEN_GEN_EXISTS(New_Gen_Id, ets:lookup(New_Gen_Id, Key)) of
-                false ->
-                    {error, {no_gen1_cache, Cache_Name}};
-                [#cxy_cache_value{key=Key, version=Version}] ->
-                    Version;
-                [] ->
-                    case ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:lookup(Old_Gen_Id, Key)) of
-                        false ->
-                            {error, {no_gen2_cache, Cache_Name}};
-                        [#cxy_cache_value{key=Key, version=Version}] ->
-                            Version;
-                        [] ->
-                            {}
-                    end
-            end
+%% Old generation function for getting just the version of a cached value entry.
+fetch_gen2_version(Cache_Name, Old_Gen_Id, Key) ->
+    case ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:lookup(Old_Gen_Id, Key)) of
+        false ->
+            {error, {no_gen2_cache, Cache_Name}};
+        [#cxy_cache_value{key=Key, version=Version}] ->
+            Version;
+        [] ->
+            {}
     end.
 
+%% Migrate an old value forward to the new generation and then clobber
+%% if the key generates a newer version. Otherwise leave the existing
+%% version in place.
+refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, {Possibly_New_Vsn, Possibly_New_Value} = _Obj) ->
+    try ets:lookup(Old_Gen_Id, Key) of
+
+        %% Create a new Mod:create_key_value value if not in old generation...
+        [] -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
+
+        %% Otherwise, migrate the old value to the new generation...
+        [#cxy_cache_value{key=Key} = Old_Obj] ->
+            insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
+            %% Then try to clobber it with a newly created value.
+            Cached_Value = case Type of
+                               key -> create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
+                               obj -> insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
+                                                            Key, Possibly_New_Vsn, Possibly_New_Value)
+                           end,
+            return_cache_refresh(Cache_Name, Cached_Value)
+    catch
+        %% Old generation was likely eliminated by another request, try creating a new value.
+        %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
+        error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
+    end.
 
 %% Copy needs to be as close to atomic as possible. Values are now tagged
 %% with a version so that the latest version wins when inserting to the
@@ -444,7 +433,7 @@ fetch_item_version(Cache_Name, Key) ->
 %% out from under us. In this case, we pretend the key doesn't exist and
 %% create a new one. At worst, we are the only user of this new value
 %% or the next access copies it to the empty generation.
-copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Key, Mod) ->
+copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key) ->
     try ets:lookup(Old_Gen_Id, Key) of
 
         %% Create a new Mod:create_key_value value if not in old generation...
