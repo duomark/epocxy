@@ -355,26 +355,27 @@ fetch_item(Cache_Name, Key) ->
                            return_cache_gen1(Fn_Cache_Name, Fn_Value)
                    end,
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, _Object) ->
-                           copy_old_value_if_found(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key)
+                           copy_old_value_if_found(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod,Fn_Key)
                    end,
     access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
 
 %% Fetch from Generation 1 or 2, after updating with a newer key version or leaving existing newest key version.
 refresh_item(Cache_Name, Key) ->
     Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
-                           Fn_New_Cached_Value = create_new_value(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key),
+                           Fn_New_Cached_Value = create_new_value(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod,Fn_Key),
                            return_cache_refresh(Fn_Cache_Name, Fn_New_Cached_Value)
                    end,
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
-                           refresh_item(key, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj)
+                           refresh_item(key, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod,Fn_Key,Fn_Obj)
                    end,
     access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
 
 %% Fetch from Generation 1 or 2, after updating with a newer obj version or leaving existing newest obj version.
 refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value} = Possibly_New_Object) ->
     Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
-                           New_Cached_Value = insert_value_if_newer(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key,
-                                                                    Possibly_New_Vsn, Possibly_New_Value),
+                           New_Cached_Value
+                               = insert_value_if_newer(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key,
+                                                       Possibly_New_Vsn, Possibly_New_Value),
                            return_cache_refresh(Cache_Name, New_Cached_Value)
                       end,
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
@@ -459,15 +460,15 @@ cache_miss(Cache_Name, New_Gen_Id, Mod, Key) ->
 %% Count specific access requests for statistics reporting...
 -define(INC(__Name, __Value, __Count_Type, __Count),
         return_and_count_cache(__Name, __Value, __Count_Type, __Count)).
-return_cache_gen1    (Cache_Name, Value) -> ?INC(Cache_Name, Value, gen1,    {#cxy_cache_meta.gen1_hit_count, 1}).
-return_cache_gen2    (Cache_Name, Value) -> ?INC(Cache_Name, Value, gen2,    {#cxy_cache_meta.gen2_hit_count, 1}).
-return_cache_refresh (Cache_Name, Value) -> ?INC(Cache_Name, Value, refresh, {#cxy_cache_meta.refresh_count,  1}).
-return_cache_error   (Cache_Name, Value) -> ?INC(Cache_Name, Value, error,   {#cxy_cache_meta.error_count,    1}).
-return_cache_miss    (Cache_Name, Value) -> ?INC(Cache_Name, Value, miss,    {#cxy_cache_meta.miss_count,     1}).
+return_cache_gen1    (Cache_Name, Value)->?INC(Cache_Name, Value, gen1,   {#cxy_cache_meta.gen1_hit_count, 1}).
+return_cache_gen2    (Cache_Name, Value)->?INC(Cache_Name, Value, gen2,   {#cxy_cache_meta.gen2_hit_count, 1}).
+return_cache_refresh (Cache_Name, Value)->?INC(Cache_Name, Value, refresh,{#cxy_cache_meta.refresh_count,  1}).
+return_cache_error   (Cache_Name, Value)->?INC(Cache_Name, Value, error,  {#cxy_cache_meta.error_count,    1}).
+return_cache_miss    (Cache_Name, Value)->?INC(Cache_Name, Value, miss,   {#cxy_cache_meta.miss_count,     1}).
 
 %% Count whether an item was deleted.
-return_cache_delete  (Cache_Name, true ) -> ?INC(Cache_Name, true,  delete,  {#cxy_cache_meta.delete_count,   1});
-return_cache_delete  (Cache_Name, false) -> ?INC(Cache_Name, false, delete,  {#cxy_cache_meta.delete_count,   0}).
+return_cache_delete  (Cache_Name, true )->?INC(Cache_Name, true,  delete, {#cxy_cache_meta.delete_count,   1});
+return_cache_delete  (Cache_Name, false)->?INC(Cache_Name, false, delete, {#cxy_cache_meta.delete_count,   0}).
 
 %% Count fetch requests for statistics reporting, even on time-based caches, but not for refresh and delete.
 return_and_count_cache(Cache_Name, Value, Count_Type, Hit_Type_Op) ->
