@@ -104,6 +104,7 @@ check_create_test(Cache_Name) ->
     %% Test invalid args to reserve...
     ct:comment("Testing invalid args for cxy_cache:reserve/2 and cache_name: ~p", [Cache_Name]),
     Cache_Module = list_to_atom(atom_to_list(Cache_Name) ++ "_module"),
+    %% The following two tests cause dialyzer errors, uncomment and recomment to eliminate baseline build errors
     %% true = try ?TM:reserve(atom_to_list(Cache_Name), Cache_Module) catch error:function_clause -> true end,
     %% true = try ?TM:reserve(Cache_Name, atom_to_list(Cache_Module)) catch error:function_clause -> true end,
 
@@ -323,8 +324,18 @@ vr_force_obj_refresh(_Config) ->
     %% Create cache and fetch one item...
     Cache_Name     = frog_cache,
     Cache_Obj_Type = frog_obj,
-    ct:comment("Put a single item into new cache: ~p", [Cache_Name]),
     reserve_and_create_cache(Cache_Name, Cache_Obj_Type, 3),
+
+    %% Test refreshing a missing item...
+    ct:comment("Refresh a missing object with a new object in cache: ~p", [Cache_Name]),
+    Exact_Version  = erlang:now(),
+    Exact_Key      = "missing-frog",
+    Exact_Object   = {frog, Exact_Key},
+    Exact_Object   = refresh(obj, Cache_Name, Exact_Key, {Exact_Version, Exact_Object}),
+    true = check_version(obj, Cache_Name, Exact_Key, Exact_Version),
+
+    %% Test refreshing an already present item...
+    ct:comment("Refresh an existing object with a new object in cache: ~p", [Cache_Name]),
     validate_force_refresh(obj, Cache_Name, frog, "frog-with-spots", erlang:now()),
 
     %% Remove cache and complete test.

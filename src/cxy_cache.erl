@@ -366,7 +366,9 @@ refresh_item(Cache_Name, Key) ->
                            return_cache_refresh(Fn_Cache_Name, Fn_New_Cached_Value)
                    end,
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
-                           refresh_item(key, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod,Fn_Key,Fn_Obj)
+                           Fn_New_Cached_Value = refresh_item(key, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id,
+                                                              Fn_Mod,Fn_Key,Fn_Obj),
+                           return_cache_miss(Fn_Cache_Name, Fn_New_Cached_Value)
                    end,
     access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
 
@@ -379,7 +381,9 @@ refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value} = Possibly_
                            return_cache_refresh(Cache_Name, New_Cached_Value)
                       end,
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
-                           refresh_item(obj, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod,Fn_Key,Fn_Obj)
+                           Fn_New_Cached_Value = refresh_item(obj, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id,
+                                                              Fn_Mod,Fn_Key,Fn_Obj),
+                           return_cache_miss(Fn_Cache_Name, Fn_New_Cached_Value)
                    end,
     access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, Possibly_New_Object).
 
@@ -409,24 +413,23 @@ refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Object) ->
     try ets:lookup(Old_Gen_Id, Key) of
 
         %% Create a new Mod:create_key_value value if not in old generation...
-        [] -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
+        [] -> refresh_now(Type, Cache_Name, New_Gen_Id, Mod, Key, Object);
 
         %% Otherwise, migrate the old value to the new generation...
         [#cxy_cache_value{key=Key} = Old_Obj] ->
             insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
             %% Then try to clobber it with a newly created value.
-            Cached_Value = case Type of
-                               key -> create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
-                               obj -> {Possibly_New_Vsn, Possibly_New_Value} = Object,
-                                      insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
-                                                            Key, Possibly_New_Vsn, Possibly_New_Value)
-                           end,
-            return_cache_refresh(Cache_Name, Cached_Value)
+            refresh_now(Type, Cache_Name, New_Gen_Id, Mod, Key, Object)
     catch
         %% Old generation was likely eliminated by another request, try creating a new value.
         %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
-        error:badarg -> cache_miss(Cache_Name, New_Gen_Id, Mod, Key)
+        error:badarg -> refresh_now(Type, Cache_Name, New_Gen_Id, Mod, Key, Object)
     end.
+
+refresh_now(key, Cache_Name, New_Gen_Id, Mod, Key, _Object) ->
+    cache_miss(Cache_Name, New_Gen_Id, Mod, Key);
+refresh_now(obj, Cache_Name, New_Gen_Id, Mod, Key, {Version, Value}) ->
+    insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value).
 
 %% Copy needs to be as close to atomic as possible. Values are now tagged
 %% with a version so that the latest version wins when inserting to the
@@ -522,6 +525,7 @@ insert_to_new_gen(Cache_Name, New_Gen_Id, Mod,
                 true  -> Cached_Value;
 
                 %% Otherwise override by re-inserting on top of the older cached value.
+                %% TODO: There is still a race condition between lookup and insert here
                 false -> true = ets:insert(New_Gen_Id, Obj),
                          Insert_Value
             end
