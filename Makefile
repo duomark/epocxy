@@ -10,6 +10,6 @@ TEST_ERLC_OPTS := -I include -I test/epocxy $(ERLC_OPTS)
 CT_OPTS := -cover test/epocxy.coverspec
 CT_SUITES = ets_buffer cxy_ctl cxy_cache
 
-DIALYZER_OPTS := -I include test/epocxy -Werror_handling -Wrace_conditions -Wunmatched_returns
+DIALYZER_OPTS := -I include -Werror_handling -Wrace_conditions -Wunmatched_returns
 
 include erlang.mk
