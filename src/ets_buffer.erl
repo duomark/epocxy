@@ -263,7 +263,7 @@ buffer_data(Name, Loc, Time, Data) ->
               | {buffer_name(), fifo | lifo}]) -> ets_buffer.
 -spec create(buffer_name(), fifo | lifo) -> buffer_name().
 -spec create(buffer_name(), ring, buffer_size()) -> buffer_name().
--spec clear(buffer_name()) -> boolean().
+-spec clear(buffer_name()) -> boolean() | buffer_error().
 -spec delete(buffer_name()) -> boolean().
 
 -spec write(buffer_name(), buffer_data()) -> non_neg_integer() | true | buffer_error().
@@ -419,7 +419,7 @@ clear_high_water(Buffer_Name) when is_atom(Buffer_Name) ->
 -spec list_dedicated(buffer_name()) -> proplists:proplist().
 -spec create_dedicated(buffer_name(), fifo | lifo) -> buffer_name().
 -spec create_dedicated(buffer_name(), ring, buffer_size()) -> buffer_name().
--spec clear_dedicated(buffer_name()) -> boolean().
+-spec clear_dedicated(buffer_name()) -> boolean() | buffer_error().
 -spec delete_dedicated(buffer_name()) -> boolean().
 
 -spec write_dedicated(buffer_name(), any()) -> non_neg_integer() | true | buffer_error().
@@ -429,10 +429,10 @@ clear_high_water(Buffer_Name) when is_atom(Buffer_Name) ->
 -spec read_timestamped_dedicated(buffer_name()) -> [buffer_data_timestamped()] | buffer_error().
 -spec read_timestamped_dedicated(buffer_name(), pos_integer()) -> [buffer_data_timestamped()] | buffer_error().
 -spec read_all_timestamped_dedicated(buffer_name()) -> [buffer_data_timestamped()] | buffer_error().
--spec history_dedicated(buffer_name()) -> [buffer_data()].
--spec history_dedicated(buffer_name(), pos_integer()) -> [buffer_data()].
--spec history_timestamped_dedicated(buffer_name()) -> [buffer_data()].
--spec history_timestamped_dedicated(buffer_name(), pos_integer()) -> [buffer_data()].
+-spec history_dedicated(buffer_name()) -> [buffer_data()] | buffer_error().
+-spec history_dedicated(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
+-spec history_timestamped_dedicated(buffer_name()) -> [buffer_data()] | buffer_error().
+-spec history_timestamped_dedicated(buffer_name(), pos_integer()) -> [buffer_data()] | buffer_error().
 -spec num_entries_dedicated(buffer_name()) -> non_neg_integer() | buffer_error().
 -spec capacity_dedicated(buffer_name()) -> pos_integer() | unlimited | buffer_error().
 -spec clear_high_water_dedicated(buffer_name()) -> true | buffer_error().

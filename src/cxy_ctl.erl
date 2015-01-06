@@ -40,7 +40,7 @@
 -type dict_value()     :: any().
 -type dict_entry()     :: {dict_key(), dict_value()}.
 -type dict_prop()      :: dict_key() | dict_entry().
--type dict_props()     :: [dict_prop()].
+-type dict_props()     :: [dict_prop()] | none | all_keys.
 -type dict_prop_vals() :: [{?VALID_DICT_VALUE_MARKER, dict_entry()}].
 
 -spec make_process_dictionary_default_value(Key, Value)
@@ -401,7 +401,7 @@ get_calling_dictionary_values([], Props) -> Props.
             
 
 -spec execute_wrapper(atom(), atom(), list(), atom(), integer(), false | erlang:timestamp(), spawn | inline, dict_prop_vals())
-                     -> true | no_return().
+                     -> any() | no_return().
 
 %% If Start is 'false', we don't want to record elapsed time history...
 execute_wrapper(Mod, Fun, Args, Task_Type, _Max_History, false, Spawn_Or_Inline, Dict_Prop_Pairs) ->
