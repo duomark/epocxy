@@ -152,7 +152,7 @@ check_maybe_execute_task(_Config) ->
     true = ?TM:init(Limits),
     Ets_Table = ets:new(check_maybe_execute_task, [public, named_table]),
 
-    try
+    _ = try
         %% Over max should refuse to run...
         {max_pids, 0} = ?TM:maybe_execute_task(Overmax_Type, ets, insert_new, [Ets_Table, {joe, 5}]),
         erlang:yield(),
@@ -228,7 +228,7 @@ check_maybe_execute_pid_link(_Config) ->
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
-    try
+    _ = try
         {max_pids, 0} = ?TM:maybe_execute_pid_link(Overmax_Type, erlang, put, [joe, 5]),
         erlang:yield(),
         undefined = get(joe),
@@ -245,7 +245,7 @@ check_maybe_execute_pid_link(_Config) ->
     %% When spawned, it affects a new process dictionary, not ours.
     Self = self(),
     Old_Joe = erase(joe),
-    try
+    _ = try
         undefined = get(joe),
         New_Pid = ?TM:maybe_execute_pid_link(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
         false = (New_Pid =:= Self),
@@ -274,7 +274,7 @@ check_execute_pid_monitor(_Config) ->
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
-    try
+    _ = try
         {inline, undefined} = ?TM:execute_pid_monitor(Inline_Type, erlang, put, [joe, 5]),
         5 = get(joe),
         {inline, 5} = ?TM:execute_pid_monitor(Inline_Type, erlang, put, [joe, 7]),
@@ -285,7 +285,7 @@ check_execute_pid_monitor(_Config) ->
     %% When spawned, it affects a new process dictionary, not ours.
     Self = self(),
     Old_Joe = erase(joe),
-    try
+    _ = try
         undefined = get(joe),
         {New_Pid, _Monitor_Ref} = ?TM:execute_pid_monitor(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
         false = (New_Pid =:= self()),
@@ -309,7 +309,7 @@ check_maybe_execute_pid_monitor(_Config) ->
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
-    try
+    _ = try
         {max_pids, 0} = ?TM:maybe_execute_pid_monitor(Overmax_Type, erlang, put, [joe, 5]),
         erlang:yield(),
         undefined = get(joe),
@@ -326,7 +326,7 @@ check_maybe_execute_pid_monitor(_Config) ->
     %% When spawned, it affects a new process dictionary, not ours.
     Self = self(),
     Old_Joe = erase(joe),
-    try
+    _ = try
         undefined = get(joe),
         {New_Pid, _Monitor_Ref} = ?TM:maybe_execute_pid_monitor(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
         false = (New_Pid =:= Self),
@@ -386,10 +386,10 @@ get_pdict() ->
 
 filter_pdict() -> [{K, V} || {{cxy_ctl, K}, V} <- get()].
 
--spec fetch_ages() -> proplists:proplist().
+-spec fetch_ages() -> pdict_timeout | {get_dict, pid(), proplists:proplist()}.
 fetch_ages() -> get_pdict().
 
--spec fetch_ets_ages(any()) -> proplists:proplist().
+-spec fetch_ets_ages(atom() | ets:tid()) -> ok.
 fetch_ets_ages(Ets_Table) ->
     Vals = [{K, V} || {{cxy_ctl, K}, V} <- get()],
     ets:insert(Ets_Table, {results, Vals}),
@@ -407,7 +407,7 @@ check_copying_dict(_Config) ->
     put({cxy_ctl, sam},  7),
     Stable_Pre_Call_Dict = filter_pdict(),
 
-    try
+    _ = try
         Self = self(),
         Ets_Table = ets:new(execute_task, [public, named_table]),
         Joe = ?TM:make_process_dictionary_default_value({cxy_ctl, joe}, 8),
