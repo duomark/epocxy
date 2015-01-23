@@ -67,7 +67,7 @@
 -type cached_key()       :: term().
 -type cached_value()     :: term().
 -type cached_value_vsn() :: term().
--callback create_key_value(cached_key()) -> {cached_value_vsn(), cached_value()}.
+-callback create_key_value(cached_key()) -> {cached_value_vsn(), cached_value()} | no_value_available.
 
 %% Return 'true' if Vsn2 later than Vsn1, otherwise 'false'.
 %% -optional_callback is_later_version(Vsn1::cached_value_vsn(), Vsn2::cached_value_vsn()) -> boolean().
@@ -308,13 +308,12 @@ replace_check_generation_fun(Cache_Name, Fun)
 %%%------------------------------------------------------------------------------
 
 -spec delete_item  (cache_name(), cached_key()) -> true.
--spec fetch_item   (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
--spec refresh_item (cache_name(), cached_key()) -> cached_value() | {error, tuple()}.
+-spec fetch_item   (cache_name(), cached_key()) -> cached_value() | no_value_available | {error, tuple()}.
+-spec refresh_item (cache_name(), cached_key()) -> cached_value() | no_value_available | {error, tuple()}.
 -spec refresh_item (cache_name(), cached_key(), {cached_value_vsn(), cached_value()})
-                   -> cached_value() | {error, tuple()}.
--spec fetch_item_version (cache_name(), cached_key()) -> cached_value_vsn() | {} | {error, tuple()}.
--spec get_and_clear_counts(cache_name())
-                          -> {cache_name(), proplists:proplist()}.
+                   -> cached_value() | no_value_available | {error, tuple()}.
+-spec fetch_item_version (cache_name(), cached_key()) -> cached_value_vsn() | no_value_available | {error, tuple()}.
+-spec get_and_clear_counts(cache_name()) -> {cache_name(), proplists:proplist()}.
 
 -define(WHEN_GEN_EXISTS(__Gen_Id, __Code), ets:info(__Gen_Id, type) =:= set andalso __Code).
 
@@ -357,7 +356,7 @@ fetch_item(Cache_Name, Key) ->
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, _Object) ->
                            copy_old_value_if_found(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod,Fn_Key)
                    end,
-    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, no_value_available).
 
 %% Fetch from Generation 1 or 2, after updating with a newer key version or leaving existing newest key version.
 refresh_item(Cache_Name, Key) ->
@@ -370,7 +369,7 @@ refresh_item(Cache_Name, Key) ->
                                                               Fn_Mod,Fn_Key,Fn_Obj),
                            return_cache_miss(Fn_Cache_Name, Fn_New_Cached_Value)
                    end,
-    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, no_value_available).
 
 %% Fetch from Generation 1 or 2, after updating with a newer obj version or leaving existing newest obj version.
 refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value} = Possibly_New_Object) ->
@@ -393,7 +392,7 @@ fetch_item_version(Cache_Name, Key) ->
     Not_Found_Fn = fun(Fn_Cache_Name, _New_Gen_Id, Fn_Old_Gen_Id, _Mod, Fn_Key, _Obj) ->
                            fetch_gen2_version(Fn_Cache_Name, Fn_Old_Gen_Id, Fn_Key)
                    end,
-    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, {}).
+    access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, no_value_available).
 
 %% Old generation function for getting just the version of a cached value entry.
 fetch_gen2_version(Cache_Name, Old_Gen_Id, Key) ->
@@ -403,12 +402,13 @@ fetch_gen2_version(Cache_Name, Old_Gen_Id, Key) ->
         [#cxy_cache_value{key=Key, version=Version}] ->
             Version;
         [] ->
-            {}
+            no_value_available
     end.
 
 %% Migrate an old value forward to the new generation and then clobber
 %% if the key generates a newer version. Otherwise leave the existing
-%% version in place.
+%% version in place, unless there is now no_value_available, in which
+%% case the entry is deleted from the cache.
 refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Object) ->
     try ets:lookup(Old_Gen_Id, Key) of
 
@@ -419,7 +419,22 @@ refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Object) ->
         [#cxy_cache_value{key=Key} = Old_Obj] ->
             insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
             %% Then try to clobber it with a newly created value.
-            refresh_now(Type, Cache_Name, New_Gen_Id, Mod, Key, Object)
+            Cached_Value = case {Type, Object} of
+                               {key, _} ->
+                                   create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
+                               {obj, no_value_available} ->
+                                   no_value_available;
+                               {obj, _} ->
+                                   {Possibly_New_Vsn, Possibly_New_Value} = Object,
+                                   insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
+                                                         Key, Possibly_New_Vsn, Possibly_New_Value)
+                           end,
+            case Cached_Value of
+                no_value_available -> ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
+                                      ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id, Key)),
+                                      return_cache_miss(Cache_Name, no_value_available);
+                {_Version, _Value} -> return_cache_refresh(Cache_Name, Cached_Value)
+            end
     catch
         %% Old generation was likely eliminated by another request, try creating a new value.
         %% The value will get inserted into 'old_gen' because New_Gen_Id must've been demoted.
@@ -456,7 +471,8 @@ copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key) ->
 
 cache_miss(Cache_Name, New_Gen_Id, Mod, Key) ->
     case create_new_value(Cache_Name, New_Gen_Id, Mod, Key) of
-        {error, _} = Error -> Error;
+        {error, _} = Error -> return_cache_miss(Cache_Name, Error);
+        no_value_available -> return_cache_miss(Cache_Name, no_value_available);
         Cached_Value       -> return_cache_miss(Cache_Name, Cached_Value)
     end.
 
@@ -501,8 +517,8 @@ get_and_clear_counts(Cache_Name) ->
 %% Create a new value from the cache Mod:create_key_value(Key) but watch for errors in generating it.
 create_new_value(Cache_Name, New_Gen_Id, Mod, Key) ->
     try Mod:create_key_value(Key) of
-        {Version, Value} ->
-            insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value)
+        no_value_available -> no_value_available;
+        {Version, Value}   -> insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value)
     catch Type:Class ->
             Error = {error, {Type,Class, {creating_new_value_with, Mod, Key}}},
             return_cache_error(Cache_Name, Error)

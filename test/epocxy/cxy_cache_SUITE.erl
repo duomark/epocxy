@@ -380,11 +380,11 @@ validate_force_refresh(Type, Cache_Name, Obj_Record_Type, Obj_Instance_Key, Old_
 
     %% Now test the old generation with refresh...
     ct:comment("Create a new generation for cache: ~p", [Cache_Name]),
-    {} = ?TM:fetch_item_version(Cache_Name, missing_object),
+    no_value_available = ?TM:fetch_item_version(Cache_Name, missing_object),
     Expected_Frog = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
     true = ?TM:maybe_make_new_generation(Cache_Name),
     true = check_version(Type, Cache_Name, Obj_Instance_Key, New_Time),
-    {} = ?TM:fetch_item_version(Cache_Name, missing_object),
+    no_value_available = ?TM:fetch_item_version(Cache_Name, missing_object),
 
     %% Refresh the old generation item...
     Expected_Frog = refresh(Type, Cache_Name, Obj_Instance_Key, {Old_Time, Expected_Frog}),

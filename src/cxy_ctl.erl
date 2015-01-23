@@ -238,8 +238,8 @@ adjust_task_limits(Task_Limits) ->
 %%   many, execute the task inline. Returns neither a pid nor a result.
 %% @end
 
--spec execute_task(atom(), atom(), atom(), list())               -> ok.
--spec execute_task(atom(), atom(), atom(), list(), dict_props()) -> ok.
+-spec execute_task(atom(), atom(), atom(), list())                          -> ok.
+-spec execute_task(atom(), atom(), atom(), list(), all_keys | dict_props()) -> ok.
 
 execute_task(Task_Type, Mod, Fun, Args) ->
     internal_execute_task(Task_Type, Mod, Fun, Args, inline, none).
@@ -254,8 +254,9 @@ execute_task(Task_Type, Mod, Fun, Args, Dict_Props) ->
 %%   many, return {max_pids, Max} without executing, rather than ok.
 %% @end
 
--spec maybe_execute_task(atom(), atom(), atom(), list())             -> ok | {max_pids, non_neg_integer()}.
--spec maybe_execute_task(atom(), atom(), atom(), list(), dict_props()) -> ok | {max_pids, non_neg_integer()}.
+-spec maybe_execute_task(atom(), atom(), atom(), list()) -> ok | {max_pids, non_neg_integer()}.
+-spec maybe_execute_task(atom(), atom(), atom(), list(),
+                         all_keys | dict_props()) -> ok | {max_pids, non_neg_integer()}.
 
 maybe_execute_task(Task_Type, Mod, Fun, Args) ->
     internal_execute_task(Task_Type, Mod, Fun, Args, refuse, none).
@@ -294,8 +295,8 @@ internal_execute_task(Task_Type, Mod, Fun, Args, Over_Limit_Action, Dict_Props) 
 %%   if inlined.
 %% @end
 
--spec execute_pid_link(atom(), atom(), atom(), list())               -> pid() | {inline, any()}.
--spec execute_pid_link(atom(), atom(), atom(), list(), dict_props()) -> pid() | {inline, any()}.
+-spec execute_pid_link(atom(), atom(), atom(), list())                          -> pid() | {inline, any()}.
+-spec execute_pid_link(atom(), atom(), atom(), list(), all_keys | dict_props()) -> pid() | {inline, any()}.
 
 execute_pid_link(Task_Type, Mod, Fun, Args) ->
     internal_execute_pid(Task_Type, Mod, Fun, Args, link, inline, none).
@@ -309,8 +310,9 @@ execute_pid_link(Task_Type, Mod, Fun, Args, Dict_Props) ->
 %%   many, return {max_pids, Max_Count} instead of linked pid.
 %% @end
 
--spec maybe_execute_pid_link(atom(), atom(), atom(), list())               -> pid() | {max_pids, non_neg_integer()}.
--spec maybe_execute_pid_link(atom(), atom(), atom(), list(), dict_props()) -> pid() | {max_pids, non_neg_integer()}.
+-spec maybe_execute_pid_link(atom(), atom(), atom(), list()) -> pid() | {max_pids, non_neg_integer()}.
+-spec maybe_execute_pid_link(atom(), atom(), atom(), list(),
+                             all_keys | dict_props()) -> pid() | {max_pids, non_neg_integer()}.
 
 maybe_execute_pid_link(Task_Type, Mod, Fun, Args) ->
     internal_execute_pid(Task_Type, Mod, Fun, Args, link, refuse, none).
@@ -325,8 +327,9 @@ maybe_execute_pid_link(Task_Type, Mod, Fun, Args, Dict_Props) ->
 %%   so the process can be monitored, or results if inlined.
 %% @end
 
--spec execute_pid_monitor(atom(), atom(), atom(), list())               -> {pid(), reference()} | {inline, any()}.
--spec execute_pid_monitor(atom(), atom(), atom(), list(), dict_props()) -> {pid(), reference()} | {inline, any()}.
+-spec execute_pid_monitor(atom(), atom(), atom(), list()) -> {pid(), reference()} | {inline, any()}.
+-spec execute_pid_monitor(atom(), atom(), atom(), list(),
+                          all_keys | dict_props()) -> {pid(), reference()} | {inline, any()}.
 
 execute_pid_monitor(Task_Type, Mod, Fun, Args) ->
     internal_execute_pid(Task_Type, Mod, Fun, Args, monitor, inline, none).
@@ -340,8 +343,9 @@ execute_pid_monitor(Task_Type, Mod, Fun, Args, Dict_Props) ->
 %%   many, return {max_pids, Max_Count} instead of {pid(), reference()}.
 %% @end
 
--spec maybe_execute_pid_monitor(atom(), atom(), atom(), list())               -> {pid(), reference()} | {max_pids, non_neg_integer()}.
--spec maybe_execute_pid_monitor(atom(), atom(), atom(), list(), dict_props()) -> {pid(), reference()} | {max_pids, non_neg_integer()}.
+-spec maybe_execute_pid_monitor(atom(), atom(), atom(), list()) -> {pid(), reference()} | {max_pids, non_neg_integer()}.
+-spec maybe_execute_pid_monitor(atom(), atom(), atom(), list(),
+                                all_keys | dict_props()) -> {pid(), reference()} | {max_pids, non_neg_integer()}.
 
 maybe_execute_pid_monitor(Task_Type, Mod, Fun, Args) ->
     internal_execute_pid(Task_Type, Mod, Fun, Args, monitor, refuse, none).
