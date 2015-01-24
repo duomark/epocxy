@@ -1,3 +1,15 @@
+%%%------------------------------------------------------------------------------
+%%% @copyright (c) 2013-2015, DuoMark International, Inc.
+%%% @author Jay Nelson <jay@duomark.com>
+%%% @reference 2013-2015 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference The license is based on the template for Modified BSD from
+%%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
+%%% @doc
+%%%   Tests for cxy_ctl using common test.
+%%%
+%%% @since 0.9.6
+%%% @end
+%%%------------------------------------------------------------------------------
 -module(cxy_ctl_SUITE).
 -auth('jay@duomark.com').
 -vsn('').
