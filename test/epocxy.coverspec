@@ -3,6 +3,9 @@
 {incl_dirs, ["../src/"]}.
 {incl_mods, [
              batch_feeder,
+             epocxy_sup,
+             epocxy_ets_fsm,
+             ets_ring_buffer_ro,
              ets_buffer,
              cxy_ctl,
              cxy_cache,

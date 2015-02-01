@@ -72,7 +72,8 @@ create_ets_table(Name, Concurrency_Type)
     gen_fsm:sync_send_event(?SERVER, {create_ets_table, Name, Options}).
 
 delete_ets_table(Table_Id_Or_Name) ->
-    gen_fsm:sync_send_event(?SERVER, {delete_ets_table, Table_Id_Or_Name}).
+    true = gen_fsm:sync_send_event(?SERVER, {delete_ets_table, Table_Id_Or_Name}),
+    ok.
 
 change_owner(Table_Id_Or_Name, New_Owner) ->
     gen_fsm:sync_send_event(?SERVER, {change_owner, Table_Id_Or_Name, New_Owner}).
@@ -112,14 +113,14 @@ code_change (_OldVsn,  State_Name, #eef_state{} = State, _Extra) -> {ok, State_N
 %% The FSM has only the 'READY' state.
 -type from() :: {pid(), reference()}.
 -spec 'READY'(create_ets_cmd(), from(), internal_state()) -> ets:tid();
-             (delete_ets_cmd(), from(), internal_state()) -> ok;
+             (delete_ets_cmd(), from(), internal_state()) -> true;
              (stop_cmd(),       from(), internal_state()) -> {stop, normal}.
 
 -define(READY(__Cmd), 'READY'(__Cmd, _From, #eef_state{} = State)).
 -define(REPLY(__Reply), {reply, __Reply, 'READY', State}).
 
-?READY({create_ets_table, Options})       when is_list(Options)                  -> ?REPLY(ets:new(noname, Options));
-?READY({create_ets_table, Name, Options}) when is_list(Options), is_atom(Name)   -> ?REPLY(ets:new(Name,   Options));
+?READY({create_ets_table, Options})       when is_list(Options)                  -> ?REPLY(ets:new(no_name, Options));
+?READY({create_ets_table, Name, Options}) when is_list(Options), is_atom(Name)   -> ?REPLY(ets:new(Name,    Options));
 ?READY({delete_ets_table, Table})         when is_atom(Table); is_integer(Table) -> ?REPLY(ets:delete(Table));
 ?READY({change_owner,     Table, Pid})    when is_atom(Table); is_integer(Table) -> ?REPLY(ets:give_away(Table, Pid, {}));
 
