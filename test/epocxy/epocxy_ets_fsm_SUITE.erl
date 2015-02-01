@@ -14,14 +14,18 @@
 -auth('jay@duomark.com').
 -vsn('').
 
--export([all/0, init_per_suite/1, end_per_suite/1]).
--export([check_create/1]).
+-export([
+         all/0,
+         init_per_suite/1, end_per_suite/1
+        ]).
+
+-export([check_create/1, check_owner/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
 -spec all() -> [atom()].
 
-all() -> [check_create].
+all() -> [check_create, check_owner].
 
 -type config() :: proplists:proplist().
 -spec init_per_suite (config()) -> config().
@@ -33,15 +37,15 @@ end_per_suite  (Config)  -> Config.
 %% Test Module is ?TM
 -define(TM, epocxy_ets_fsm).
 
+
 %%%------------------------------------------------------------------------------
 %%% Unit tests for cxy_cache core
 %%%------------------------------------------------------------------------------
 
-
-%% Validate any atom can be used as a cache_name and info/1 will report properly.
+%% Validate ets tables are created with the proper attributes, and can be deleted.
 -spec check_create(config()) -> ok.
 check_create(_Config) ->
-    epocxy_sup:start_link(),
+    {ok, Sup_Pid} = epocxy_sup:start_link(),
 
     ct:log("Create and delete unnamed ets tables"),
     Fsm_Pid = whereis(?TM),
@@ -55,13 +59,8 @@ check_create(_Config) ->
                                              {t3, write_only}, {t4, read_and_write}]],
     
     ct:comment("Successfully tested creating and deleting ets tables"),
-    cleanup(whereis(epocxy_sup), Fsm_Pid),
+    cleanup(Sup_Pid, Fsm_Pid),
     ok.
-
-cleanup(Pid, Fsm_Pid) ->
-    supervisor:terminate_child(Pid, Fsm_Pid),
-    unlink(Pid),
-    exit(Pid, kill).
 
 validate_create_table(Fsm_Pid, Cxy_Type, Named) ->
     Tid = case Named of
@@ -76,3 +75,22 @@ validate_create_table(Fsm_Pid, Cxy_Type, Named) ->
     end,
     ok = ?TM:delete_ets_table(Tid),
     ok.
+
+%% Validate the owner of an ets table can be changed.
+check_owner(_Config) ->
+    {ok, Sup_Pid} = epocxy_sup:start_link(),
+    Fsm_Pid       = whereis(?TM),
+
+    T1            = ?TM:create_ets_table(write_only),
+    Fsm_Pid       = ets:info(T1, owner),
+    Self          = self(),
+    ok            = ?TM:change_owner(T1, Self),
+    Self          = ets:info(T1, owner),
+
+    cleanup(Sup_Pid, Fsm_Pid),
+    ok.
+
+cleanup(Pid, Fsm_Pid) ->
+    supervisor:terminate_child(Pid, Fsm_Pid),
+    unlink(Pid),
+    exit(Pid, kill).

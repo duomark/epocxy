@@ -53,11 +53,11 @@
 -type ets_concurrency() :: none | read_only | write_only | read_and_write.
 -export_type([ets_concurrency/0]).
 
--spec start_link() -> {ok, pid()}.
--spec create_ets_table(ets_concurrency()) -> ets:tid().
--spec create_ets_table(atom(), ets_concurrency()) -> ets:tid().
--spec delete_ets_table(atom() | ets:tid()) -> ok.
--spec change_owner(atom() | ets:tid(), pid()) -> ok.
+-spec start_link       ()                          -> {ok, pid()}.
+-spec create_ets_table (ets_concurrency())         -> ets:tid().
+-spec create_ets_table (atom(), ets_concurrency()) -> ets:tid().
+-spec delete_ets_table (atom() | ets:tid())        -> ok.
+-spec change_owner     (atom() | ets:tid(), pid()) -> ok.
 
 start_link() ->
     gen_fsm:start_link({local, ?SERVER}, ?MODULE, {}, []).
@@ -76,7 +76,8 @@ delete_ets_table(Table_Id_Or_Name) ->
     ok.
 
 change_owner(Table_Id_Or_Name, New_Owner) ->
-    gen_fsm:sync_send_event(?SERVER, {change_owner, Table_Id_Or_Name, New_Owner}).
+    true = gen_fsm:sync_send_event(?SERVER, {change_owner, Table_Id_Or_Name, New_Owner}),
+    ok.
 
 make_options(none)           -> make_base_options([]);
 make_options(read_only)      -> make_base_options([{read_concurrency,  true}]);
@@ -92,13 +93,14 @@ make_base_options(Concurrency_Options) ->
 %%% gen_fsm callbacks
 %%%===================================================================
 
--type internal_state() :: #eef_state{}.
--type state_name()     :: 'READY'.
--type create_ets_cmd() :: {create_ets_table, proplists:proplist()}
-                        | {create_ets_table, Name::atom(), proplists:proplist()}.
--type delete_ets_cmd() :: {delete_ets_table, ets:tid() | atom()}.
--type stop_cmd()       :: stop.
-%% -type ready_cmds()     :: create_ets_cmd() | delete_ets_cmd() | stop_cmd().
+-type internal_state()   :: #eef_state{}.
+-type state_name()       :: 'READY'.
+-type create_ets_cmd()   :: {create_ets_table, proplists:proplist()}
+                          | {create_ets_table, Name::atom(), proplists:proplist()}.
+-type delete_ets_cmd()   :: {delete_ets_table, ets:tid() | atom()}.
+-type change_owner_cmd() :: {change_owner,     ets:tid() | atom(), pid()}.
+-type stop_cmd()         :: stop.
+%% -type ready_cmds()     :: create_ets_cmd() | delete_ets_cmd() | change_owner_cmd() | stop_cmd().
 
 -spec init({}) -> {ok, 'READY', internal_state()}.
 -spec terminate   (any(), state_name(), internal_state())        -> ok.
@@ -112,9 +114,10 @@ code_change (_OldVsn,  State_Name, #eef_state{} = State, _Extra) -> {ok, State_N
 
 %% The FSM has only the 'READY' state.
 -type from() :: {pid(), reference()}.
--spec 'READY'(create_ets_cmd(), from(), internal_state()) -> ets:tid();
-             (delete_ets_cmd(), from(), internal_state()) -> true;
-             (stop_cmd(),       from(), internal_state()) -> {stop, normal}.
+-spec 'READY'(create_ets_cmd(),   from(), internal_state()) -> ets:tid();
+             (delete_ets_cmd(),   from(), internal_state()) -> true;
+             (change_owner_cmd(), from(), internal_state()) -> true;
+             (stop_cmd(),         from(), internal_state()) -> {stop, normal}.
 
 -define(READY(__Cmd), 'READY'(__Cmd, _From, #eef_state{} = State)).
 -define(REPLY(__Reply), {reply, __Reply, 'READY', State}).
