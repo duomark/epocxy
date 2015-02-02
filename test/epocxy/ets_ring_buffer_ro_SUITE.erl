@@ -67,15 +67,21 @@ end_per_testcase  (_Test_Case, Config) -> Config.
 %%% Unit tests for ets_ring_buffer_ro core
 %%%------------------------------------------------------------------------------
 
-%% Validate any atom can be used as a ring_name and info/1 will report properly.
+gen_ring_names() ->
+    ?LET(Ring_Names, list(atom()), Ring_Names).
+
+%% Validate any atom can be used as a ring_name and list will report properly.
 -spec proper_check_create(config()) -> ok.
 proper_check_create(_Config) ->
     {ok, Sup_Pid} = epocxy_sup:start_link(),
     Fsm_Pid       = whereis(epocxy_ets_fsm),
 
     ct:log("Test using an atom as a ring name"),
-    Test_Ring_Name = ?FORALL(Ring_Name, ?SUCHTHAT(Ring_Name, atom(), Ring_Name =/= ''),
-                             check_create_test(Ring_Name, Sup_Pid, Fsm_Pid)),
+    Test_Ring_Name = ?FORALL(Names, gen_ring_names(),
+                             case [N || N <- Names, N =/= ''] of
+                                 []         -> true;
+                                 Ring_Names -> check_create_test(Ring_Names, Sup_Pid, Fsm_Pid)
+                             end),
     true = proper:quickcheck(Test_Ring_Name, ?PQ_NUM(5)),
     ct:comment("Successfully tested atoms as ring_names"),
 
@@ -83,18 +89,27 @@ proper_check_create(_Config) ->
     cleanup(Sup_Pid, Fsm_Pid),
     ok.
                               
-check_create_test(Ring_Name, Sup_Pid, Fsm_Pid) ->
+check_create_test(Ring_Names, Sup_Pid, Fsm_Pid) ->
     %% No rings exist yet...
     [] = ?TM:list(),
     [] = ?TM:list(missing_ring),
 
-    ct:comment("Testing ring_name: ~p", [Ring_Name]),
-    ct:log("Testing ring_name: ~p", [Ring_Name]),
-    true = ?TM:create(Ring_Name),
-    0    = ?TM:ring_size(Ring_Name),
-    true = ?TM:delete(Ring_Name),
+    ct:comment ("Testing ring_names ~p", [Ring_Names]),
+    ct:log     ("Testing ring_names ~p", [Ring_Names]),
+    Num_Rings   = length(Ring_Names),
+    Exp_Counts  = lists:duplicate(Num_Rings, 0),
+    Exp_Counts  = [check_one_ring(R) || R <- Ring_Names],
+
+    ct:comment("Deleting all rings"),
+    Exp_Deletes = lists:duplicate(Num_Rings, true),
+    Exp_Deletes = [?TM:delete(R) || R <- Ring_Names],
+    [] = ?TM:list(),
 
     true.
+
+check_one_ring(Ring_Name) ->
+    true = ?TM:create    (Ring_Name),
+    0    = ?TM:ring_size (Ring_Name).
 
 cleanup(Pid, Fsm_Pid) ->
     supervisor:terminate_child(Pid, Fsm_Pid),
