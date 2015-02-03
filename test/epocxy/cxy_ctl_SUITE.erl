@@ -1,3 +1,15 @@
+%%%------------------------------------------------------------------------------
+%%% @copyright (c) 2013-2015, DuoMark International, Inc.
+%%% @author Jay Nelson <jay@duomark.com>
+%%% @reference 2013-2015 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference The license is based on the template for Modified BSD from
+%%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
+%%% @doc
+%%%   Tests for cxy_ctl using common test.
+%%%
+%%% @since 0.9.6
+%%% @end
+%%%------------------------------------------------------------------------------
 -module(cxy_ctl_SUITE).
 -auth('jay@duomark.com').
 -vsn('').
@@ -123,7 +135,7 @@ check_execute_task(_Config) ->
     true = ?TM:init(Limits),
     Ets_Table = ets:new(check_execute_task, [public, named_table]),
 
-    try
+    _ = try
         %% Inline update the shared ets table...
         ok = ?TM:execute_task(Inline_Type, ets, insert_new, [Ets_Table, {joe, 5}]),
         [{joe, 5}] = ets:lookup(Ets_Table, joe),
@@ -191,7 +203,7 @@ check_execute_pid_link(_Config) ->
     
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
-    try
+    _ = try
         {inline, undefined} = ?TM:execute_pid_link(Inline_Type, erlang, put, [joe, 5]),
         5 = get(joe),
         {inline, 5} = ?TM:execute_pid_link(Inline_Type, erlang, put, [joe, 7]),
@@ -202,7 +214,7 @@ check_execute_pid_link(_Config) ->
     %% When spawned, it affects a new process dictionary, not ours.
     Self = self(),
     Old_Joe = erase(joe),
-    try
+    _ = try
         undefined = get(joe),
         New_Pid = ?TM:execute_pid_link(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
         false = (New_Pid =:= Self),
@@ -386,7 +398,7 @@ get_pdict() ->
 
 filter_pdict() -> [{K, V} || {{cxy_ctl, K}, V} <- get()].
 
--spec fetch_ages() -> pdict_timeout | {get_dict, pid(), proplists:proplist()}.
+-spec fetch_ages() -> pdict_timeout | {get_pdict, pid(), proplists:proplist()}.
 fetch_ages() -> get_pdict().
 
 -spec fetch_ets_ages(atom() | ets:tid()) -> ok.

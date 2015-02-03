@@ -2,10 +2,11 @@
 %% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
 %% ex: ts=4 sw=4 et
 
+
 {application, epocxy,
  [
   {id, "epocxy"},
-  {vsn, "0.9.8c"},
+  {vsn, "0.9.8d"},
   {description, "Erlang Patterns of Concurrency"},
   {modules,      [
                   ets_buffer,
