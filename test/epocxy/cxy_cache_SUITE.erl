@@ -144,14 +144,17 @@ validate_create_and_fetch(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Insta
     [#cxy_cache_meta{new_gen=New, old_gen=Old}] = ets:lookup(?TM, Cache_Name),
 
     %% First time creates new value (fetch_count always indicates next access count)...
+    false = ?TM:is_cached(Cache_Name, Obj_Instance_Key),
     Before_Obj_Insert = erlang:now(),
     {Obj_Record_Type, Obj_Instance_Key} = ?TM:fetch_item(Cache_Name, Obj_Instance_Key),
     [] = ets:lookup(Old, Obj_Instance_Key),
     [#cxy_cache_value{key=Obj_Instance_Key, version=Obj_Create_Time,
                       value={Obj_Record_Type, Obj_Instance_Key}}] = ets:lookup(New, Obj_Instance_Key),
     [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
-    true = timer:now_diff(Obj_Create_Time, Before_Obj_Insert) > 0,
+    true  = ?TM:is_cached(Cache_Name, Obj_Instance_Key),
+    true  = timer:now_diff(Obj_Create_Time, Before_Obj_Insert) > 0,
     false = ?TM:maybe_make_new_generation(Cache_Name),
+    true  = ?TM:is_cached(Cache_Name, Obj_Instance_Key),
     ok.
 
 vf_check_many_fetches(_Config) ->
@@ -207,9 +210,12 @@ validate_new_generations(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1, 
 
     %% Force check which triggers generation rotation...
     ct:comment("Create a new generation for cache: ~p", [Cache_Name]),
+    true = ?TM:is_cached(Cache_Name, Obj_Key1),
     true = ?TM:maybe_make_new_generation(Cache_Name),
     [#cxy_cache_meta{new_gen=New2, old_gen=New}] = ets:lookup(?TM, Cache_Name),
     0 = ets:info(New2, size),
+    true  = ?TM:is_cached(Cache_Name, Obj_Key1),
+    false = ?TM:is_cached(Cache_Name, Obj_Key2),
     {Obj_Record_Type, Obj_Key2} = ?TM:fetch_item(Cache_Name, Obj_Key2),
     1 = ets:info(New2, size),
     [] = ets:lookup(New2, Obj_Key1),
@@ -218,6 +224,8 @@ validate_new_generations(Cache_Name, Cache_Obj_Type, Obj_Record_Type, Obj_Key1, 
     [Initial_Obj_Value1] = ets:lookup(New, Obj_Key1),
     [] = ets:lookup(New, Obj_Key2),
     [#cxy_cache_meta{fetch_count=1}] = ets:lookup(?TM, Cache_Name),
+    true = ?TM:is_cached(Cache_Name, Obj_Key1),
+    true = ?TM:is_cached(Cache_Name, Obj_Key2),
 
     %% Now check if migration of key Obj_Key1 works properly...
     ct:comment("Try to migrate a value from old generation to new generation in cache: ~p", [Cache_Name]),
