@@ -157,15 +157,18 @@ make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors
     {make_buffer_params(Buffer_Params, Type, History_Count),
      make_proc_params(Cxy_Params, Type, Max_Procs, History_Count), Errors}.
     
-
+make_buffer_slow  (Type) -> list_to_atom("slow_"   ++ atom_to_list(Type)).
 make_buffer_spawn (Type) -> list_to_atom("spawn_"  ++ atom_to_list(Type)).
 make_buffer_inline(Type) -> list_to_atom("inline_" ++ atom_to_list(Type)).
-make_buffer_names (Type) -> {make_buffer_spawn(Type), make_buffer_inline(Type)}.
+make_buffer_names (Type) -> {make_buffer_spawn(Type), make_buffer_inline(Type), make_buffer_slow(Type)}.
 
 make_buffer_params(Acc, _Type, 0) -> Acc;
 make_buffer_params(Acc,  Type, Max_History) ->
-    {Spawn_Type, Inline_Type} = make_buffer_names(Type),
-    [{Spawn_Type, ring, Max_History}, {Inline_Type, ring, Max_History} | Acc].
+    {Spawn_Type, Inline_Type, Slow_Type} = make_buffer_names(Type),
+    [{Spawn_Type,  ring, Max_History},
+     {Inline_Type, ring, Max_History},
+     {Slow_Type,   ring, Max_History}
+     | Acc].
 
 make_proc_params(Acc, Type, Max_Procs, Max_History) ->
     [make_proc_values(Type, Max_Procs, Max_History) | Acc].
@@ -205,9 +208,8 @@ add_task_types(Limits) ->
 remove_task_types(Task_Types) ->    
     case [Task_Type || Task_Type <- Task_Types, ets:lookup(?MODULE, Task_Type) =/= []] of
         Task_Types  -> Deletes = [begin
-                                      {Buff1, Buff2} = make_buffer_names(Task_Type),
-                                      {ets_buffer:delete(Buff1),
-                                       ets_buffer:delete(Buff2)}
+                                      {Buff1, Buff2, Buff3} = make_buffer_names(Task_Type),
+                                      [ets_buffer:delete(B) || B <- [Buff1, Buff2, Buff3]]
                                   end || Task_Type <- Task_Types, ets:delete(?MODULE, Task_Type)],
                        length(Deletes);
         Found_Types -> {error, {missing_task_types, Task_Types -- Found_Types}}
@@ -465,21 +467,25 @@ concurrency_types() ->
 %%    of microseconds to execute the request.
 %% @end
 
--type spawn_history_result()  :: {spawn_execs, [proplists:proplist()]}.
+-type spawn_history_result()  :: {spawn_execs,  [proplists:proplist()]}.
 -type inline_history_result() :: {inline_execs, [proplists:proplist()]}.
--type history_result() :: {spawn_history_result(), inline_history_result()}.
+-type slow_history_result()   :: {slow_execs,   [proplists:proplist()]}.
+
+-type history_result() :: {spawn_history_result(), inline_history_result(), slow_history_result()}.
 
 -spec history(atom()) -> history_result() | ets_buffer:buffer_error().
--spec history(atom(), inline | spawn, pos_integer())
-             -> inline_history_result() | spawn_history_result() | ets_buffer:buffer_error().
+-spec history(atom(), inline, pos_integer()) -> inline_history_result() | ets_buffer:buffer_error();
+             (atom(), spawn,  pos_integer()) -> spawn_history_result()  | ets_buffer:buffer_error();
+             (atom(), slow,   pos_integer()) -> slow_history_result()   | ets_buffer:buffer_error().
 
 %% @doc Provide all the performance history for a given task_type.
 history(Task_Type) ->
-    {Spawn_Type, Inline_Type} = make_buffer_names(Task_Type),
+    {Spawn_Type, Inline_Type, Slow_Type} = make_buffer_names(Task_Type),
     case get_buffer_times(Spawn_Type) of
         Spawn_Times_List when is_list(Spawn_Times_List) ->
             {{spawn_execs,  Spawn_Times_List},
-             {inline_execs, get_buffer_times(Inline_Type)}};
+             {inline_execs, get_buffer_times(Inline_Type)},
+             {slow_execs,   get_buffer_times(Slow_Type)}};
         Error -> Error
     end.
 
@@ -494,6 +500,12 @@ history(Task_Type, spawn, Num_Items) ->
     Spawn_Type = make_buffer_spawn(Task_Type),
     case get_buffer_times(Spawn_Type, Num_Items) of
         Spawn_Times_List when is_list(Spawn_Times_List) -> {spawn_execs, Spawn_Times_List};
+        Error -> Error
+    end;
+history(Task_Type, slow, Num_Items) ->
+    Slow_Type = make_buffer_slow(Task_Type),
+    case get_buffer_times(Slow_Type, Num_Items) of
+        Slow_Times_List when is_list(Slow_Times_List) -> {slow_execs, Slow_Times_List};
         Error -> Error
     end.
 
