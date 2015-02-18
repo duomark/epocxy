@@ -36,6 +36,9 @@
 
 -define(VALID_DICT_VALUE_MARKER, '$$dict_prop').
 
+-type task_type() :: atom().
+-type cxy_limit() :: pos_integer() | unlimited | inline_only.
+
 -type dict_key()       :: any().
 -type dict_value()     :: any().
 -type dict_entry()     :: {dict_key(), dict_value()}.
@@ -58,14 +61,43 @@ make_process_dictionary_default_value(Key, Value) ->
 
 %% Use a raw tuple because two record structs with the same key would
 %% be needed, or redundant record name in key position.
+
+%% Cxy counters tuple...
 -define(MAX_PROCS_POS,    2).
 -define(ACTIVE_PROCS_POS, 3).
 -define(MAX_HISTORY_POS,  4).
 
-make_proc_values(Task_Type, Max_Procs_Allowed, Max_History) ->
+%% Cumulative performance moving average tuple...
+-define(CMA_TYPE_POS,        1).
+-define(CMA_SPAWN_CMA_POS,   2).
+-define(CMA_EXEC_CMA_POS,    3).
+-define(CMA_RING_SIZE_POS,   4).
+-define(CMA_SLOW_FACTOR_POS, 5).
+
+%% Read all values using update_counter to avoid releasing write_lock for a read_lock.
+-define(CMA_READ_CMD,
+        [{?CMA_SPAWN_CMA_POS,   0},
+         {?CMA_EXEC_CMA_POS,    0},
+         {?CMA_RING_SIZE_POS,   0},
+         {?CMA_SLOW_FACTOR_POS, 0}
+        ]).
+
+%% Update moving averages using update_element to avoid read_lock.
+-define(CMA_WRITE_CMD(__Spawn, __Exec),
+        [{?CMA_SPAWN_CMA_POS, __Spawn},
+         {?CMA_EXEC_CMA_POS,  __Exec}
+        ]).
+
+make_cma_key(Task_Type) ->
+    {cma, Task_Type}.
+
+make_proc_values(Task_Type, Max_Procs_Allowed, Max_History, Slow_Factor) ->
     Active_Procs = 0,
     Stored_Max_Procs_Value = max_procs_to_int(Max_Procs_Allowed),
-    {Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History}.
+    %% Cxy counters init tuple...
+    {{Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History},
+     %% Cumulative performance moving average init tuple...
+     {make_cma_key(Task_Type), 0, 0, Max_History, Slow_Factor}}.
 
 max_procs_to_int(unlimited)   -> -1;
 max_procs_to_int(inline_only) ->  0;
@@ -88,21 +120,71 @@ incr_active_procs(Task_Type) ->
 decr_active_procs(Task_Type) ->
     ets:update_counter(?MODULE, Task_Type, {?ACTIVE_PROCS_POS, -1}).
 
-update_times(Task_Type_Modified, Task_Fun, Start, Spawn, Done) ->
+
+-type snap()        :: erlang:timestamp().
+-type exec_triple() :: {module(), atom(), list()}.
+
+-spec update_spawn_times  (task_type(), exec_triple(), snap(), snap(), snap()) -> is_slow | not_slow.
+-spec update_inline_times (task_type(), exec_triple(), snap(), snap(), snap()) -> is_slow | not_slow.
+
+update_spawn_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
+    case update_times(make_buffer_spawn(Task_Type), Task_Type, Task_Fun, Start, Spawn, Done, true) of
+        is_slow   -> update_slow_times(Task_Type, Task_Fun, Start, Spawn, Done);
+        _Not_Slow -> not_slow
+    end.
+
+update_inline_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
+    case update_times(make_buffer_inline(Task_Type), Task_Type, Task_Fun, Start, Spawn, Done, true) of
+        is_slow   -> update_slow_times(Task_Type, Task_Fun, Start, Spawn, Done);
+        _Not_Slow -> not_slow
+    end.
+
+update_slow_times(Task_Type, Task_Fun, Start, Spawn, Done) -> 
+    not_checked = update_times(make_buffer_slow(Task_Type), Task_Type, Task_Fun, Start, Spawn, Done, false),
+    slow.
+
+update_times(Task_Table, Task_Type, Task_Fun, Start, Spawn, Done, Check_Slowness) ->
     Exec_Elapsed  = timer:now_diff(Done, Spawn),
     Spawn_Elapsed = timer:now_diff(Spawn, Start),
     Elapsed = {Task_Fun, Start, Spawn_Elapsed, Exec_Elapsed},
-    ets_buffer:write(Task_Type_Modified, Elapsed).
+    case ets_buffer:write(Task_Table, Elapsed) of
+        {missing_ets_buffer, _} = Error ->
+            Error;
+        _Num_Entries  ->
+            case Check_Slowness of
+                true  -> check_if_slow(Task_Type, Spawn_Elapsed, Exec_Elapsed);
+                false -> not_checked
+            end
+    end.
 
--spec update_spawn_times(atom(), {module(), atom(), list()}, erlang:timestamp(),
-                         erlang:timestamp(), erlang:timestamp()) -> true.
-update_spawn_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
-    update_times(make_buffer_spawn(Task_Type), Task_Fun, Start, Spawn, Done).
+check_if_slow(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
+    {Spawn_Cma, Exec_Cma, Slow_Factor} = update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed),
+    case       is_slow(Spawn_Elapsed, Spawn_Cma, Slow_Factor)
+        orelse is_slow(Exec_Elapsed,  Exec_Cma,  Slow_Factor) of
 
--spec update_inline_times(atom(), {module(), atom(), list()}, erlang:timestamp(),
-                          erlang:timestamp(), erlang:timestamp()) -> true.
-update_inline_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
-    update_times(make_buffer_inline(Task_Type), Task_Fun, Start, Spawn, Done).
+        true  -> is_slow;
+        false -> not_slow
+    end.
+
+%% Slow_Factor is a percentage, so 300 would be 3x the moving average.
+is_slow(_,                    0,           _) -> false;
+is_slow(Sample_Time, Moving_Avg, Slow_Factor) ->
+    round((Sample_Time / Moving_Avg) * 100) >= Slow_Factor.
+
+update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
+    %% Use simple moving averages (approximate because of concurrency clobbering as well)...
+    Cma_Key = make_cma_key(Task_Type),
+    [Old_Spawn_Cma, Old_Exec_Cma, Num_Samples, Slow_Factor]
+        = ets:update_counter(?MODULE, Cma_Key, ?CMA_READ_CMD),
+    New_Exec_Cma  = cumulative_moving_avg(Old_Exec_Cma,  Exec_Elapsed,  Num_Samples),
+    New_Spawn_Cma = cumulative_moving_avg(Old_Spawn_Cma, Spawn_Elapsed, Num_Samples),
+    true = ets:update_element(?MODULE, Cma_Key, ?CMA_WRITE_CMD(New_Spawn_Cma, New_Exec_Cma)),
+    %% The previous moving averages are returned for comparison.
+    {Old_Spawn_Cma, Old_Exec_Cma, Slow_Factor}.
+
+cumulative_moving_avg(      0, New_Case, _Num_Samples) -> New_Case;
+cumulative_moving_avg(Old_Avg, New_Case,  Num_Samples) ->
+    round((Num_Samples * Old_Avg + New_Case) / (Num_Samples + 1)).
 
 
 %%%------------------------------------------------------------------------------
@@ -123,15 +205,13 @@ update_inline_times(Task_Type, Task_Fun, Start, Spawn, Done) ->
 %%   badarg because the ets table holding the limits will be gone.
 %% @end
 
--type task_type() :: atom().
--type cxy_limit() :: pos_integer() | unlimited | inline_only.
-
--spec init([{Task_Type, Type_Max, Timer_History_Count}])
+-spec init([{Task_Type, Type_Max, Timer_History_Count, Slow_Factor}])
           -> boolean() | {error, init_already_executed}
                  | {error, {invalid_init_args, list()}} when
       Task_Type :: task_type(),
       Type_Max  :: cxy_limit(),
-      Timer_History_Count :: non_neg_integer().
+      Timer_History_Count :: non_neg_integer(),
+      Slow_Factor :: 101 .. 100000.
 
 init(Limits) ->
     case ets:info(?MODULE, name) of
@@ -144,25 +224,28 @@ init(Limits) ->
             end
     end.
 
-valid_limits({Type, Max_Procs, History_Count} = Limit, {Buffer_Params, Cxy_Params, Errors})
-  when is_atom(Type), is_integer(History_Count), History_Count >= 0 ->
+valid_limits({Type, Max_Procs, History_Count, Slow_Factor} = Limit,
+             {Buffer_Params, Cxy_Params, Errors}           = Results)
+  when is_atom(Type),
+       is_integer(History_Count), History_Count >=   0,
+       is_integer(Slow_Factor),   Slow_Factor   >= 101, Slow_Factor =< 100000 ->
     case is_valid_limit(Max_Procs) of
-        true  -> make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors});
+        true  -> make_limits(Limit, Results);
         false -> {Buffer_Params, Cxy_Params, [Limit | Errors]}
     end;
 valid_limits(Invalid, {Buffer_Params, Cxy_Params, Errors}) ->
     {Buffer_Params, Cxy_Params, [Invalid | Errors]}.
 
-make_limits({Type, Max_Procs, History_Count}, {Buffer_Params, Cxy_Params, Errors}) ->
+make_limits({Type, Max_Procs, History_Count, Slow_Factor}, {Buffer_Params, Cxy_Params, Errors}) ->
     {make_buffer_params(Buffer_Params, Type, History_Count),
-     make_proc_params(Cxy_Params, Type, Max_Procs, History_Count), Errors}.
+     make_proc_params(Cxy_Params, Type, Max_Procs, History_Count, Slow_Factor), Errors}.
     
 make_buffer_slow  (Type) -> list_to_atom("slow_"   ++ atom_to_list(Type)).
 make_buffer_spawn (Type) -> list_to_atom("spawn_"  ++ atom_to_list(Type)).
 make_buffer_inline(Type) -> list_to_atom("inline_" ++ atom_to_list(Type)).
 make_buffer_names (Type) -> {make_buffer_spawn(Type), make_buffer_inline(Type), make_buffer_slow(Type)}.
 
-make_buffer_params(Acc, _Type, 0) -> Acc;
+make_buffer_params(Acc, _Type,           0) -> Acc;
 make_buffer_params(Acc,  Type, Max_History) ->
     {Spawn_Type, Inline_Type, Slow_Type} = make_buffer_names(Type),
     [{Spawn_Type,  ring, Max_History},
@@ -170,17 +253,21 @@ make_buffer_params(Acc,  Type, Max_History) ->
      {Slow_Type,   ring, Max_History}
      | Acc].
 
-make_proc_params(Acc, Type, Max_Procs, Max_History) ->
-    [make_proc_values(Type, Max_Procs, Max_History) | Acc].
+make_proc_params(Acc, Type, Max_Procs, Max_History, Slow_Factor) ->
+    [make_proc_values(Type, Max_Procs, Max_History, Slow_Factor) | Acc].
     
     
 do_init(Buffer_Params, Cxy_Params) ->
     _ = ets:new(?MODULE, [named_table, ordered_set, public, {write_concurrency, true}]),
     do_insert_limits(Buffer_Params, Cxy_Params).
 
-do_insert_limits(Buffer_Params, Cxy_Params) ->
+do_insert_limits(Buffer_Params, Cxy_Cma_Params) ->
     ets_buffer:create(Buffer_Params),
-    ets:insert_new(?MODULE, Cxy_Params).
+    [begin
+         ets:insert_new(?MODULE, Cxy_Params),
+         ets:insert_new(?MODULE, Cma_Params)
+     end || {Cxy_Params, Cma_Params} <- Cxy_Cma_Params],
+    true.
 
 
 -spec add_task_types([{Task_Type, Type_Max, Timer_History_Count}])
@@ -485,7 +572,7 @@ history(Task_Type) ->
         Spawn_Times_List when is_list(Spawn_Times_List) ->
             {{spawn_execs,  Spawn_Times_List},
              {inline_execs, get_buffer_times(Inline_Type)},
-             {slow_execs,   get_buffer_times(Slow_Type)}};
+             {slow_execs,   get_buffer_times(Slow_Type)}} ;
         Error -> Error
     end.
 
