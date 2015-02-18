@@ -91,13 +91,13 @@ make_process_dictionary_default_value(Key, Value) ->
 make_cma_key(Task_Type) ->
     {cma, Task_Type}.
 
-make_proc_values(Task_Type, Max_Procs_Allowed, Max_History, Slow_Factor) ->
+make_proc_values(Task_Type, Max_Procs_Allowed, Max_History, Slow_Factor_As_Percentage) ->
     Active_Procs = 0,
     Stored_Max_Procs_Value = max_procs_to_int(Max_Procs_Allowed),
     %% Cxy counters init tuple...
     {{Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History},
      %% Cumulative performance moving average init tuple...
-     {make_cma_key(Task_Type), 0, 0, Max_History, Slow_Factor}}.
+     {make_cma_key(Task_Type), 0, 0, Max_History, Slow_Factor_As_Percentage}}.
 
 max_procs_to_int(unlimited)   -> -1;
 max_procs_to_int(inline_only) ->  0;
@@ -158,9 +158,9 @@ update_times(Task_Table, Task_Type, Task_Fun, Start, Spawn, Done, Check_Slowness
     end.
 
 check_if_slow(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
-    {Spawn_Cma, Exec_Cma, Slow_Factor} = update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed),
-    case       is_slow(Spawn_Elapsed, Spawn_Cma, Slow_Factor)
-        orelse is_slow(Exec_Elapsed,  Exec_Cma,  Slow_Factor) of
+    {Spawn_Cma, Exec_Cma, Slow_Factor_As_Percentage} = update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed),
+    case       is_slow(Spawn_Elapsed, Spawn_Cma, Slow_Factor_As_Percentage)
+        orelse is_slow(Exec_Elapsed,  Exec_Cma,  Slow_Factor_As_Percentage) of
 
         true  -> is_slow;
         false -> not_slow
@@ -168,19 +168,19 @@ check_if_slow(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
 
 %% Slow_Factor is a percentage, so 300 would be 3x the moving average.
 is_slow(_,                    0,           _) -> false;
-is_slow(Sample_Time, Moving_Avg, Slow_Factor) ->
-    round((Sample_Time / Moving_Avg) * 100) >= Slow_Factor.
+is_slow(Sample_Time, Moving_Avg, Slow_Factor_As_Percentage) ->
+    round((Sample_Time / Moving_Avg) * 100) >= Slow_Factor_As_Percentage.
 
 update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
     %% Use simple moving averages (approximate because of concurrency clobbering as well)...
     Cma_Key = make_cma_key(Task_Type),
-    [Old_Spawn_Cma, Old_Exec_Cma, Num_Samples, Slow_Factor]
+    [Old_Spawn_Cma, Old_Exec_Cma, Num_Samples, Slow_Factor_As_Percentage]
         = ets:update_counter(?MODULE, Cma_Key, ?CMA_READ_CMD),
     New_Exec_Cma  = cumulative_moving_avg(Old_Exec_Cma,  Exec_Elapsed,  Num_Samples),
     New_Spawn_Cma = cumulative_moving_avg(Old_Spawn_Cma, Spawn_Elapsed, Num_Samples),
     true = ets:update_element(?MODULE, Cma_Key, ?CMA_WRITE_CMD(New_Spawn_Cma, New_Exec_Cma)),
     %% The previous moving averages are returned for comparison.
-    {Old_Spawn_Cma, Old_Exec_Cma, Slow_Factor}.
+    {Old_Spawn_Cma, Old_Exec_Cma, Slow_Factor_As_Percentage}.
 
 cumulative_moving_avg(      0, New_Case, _Num_Samples) -> New_Case;
 cumulative_moving_avg(Old_Avg, New_Case,  Num_Samples) ->
@@ -205,13 +205,13 @@ cumulative_moving_avg(Old_Avg, New_Case,  Num_Samples) ->
 %%   badarg because the ets table holding the limits will be gone.
 %% @end
 
--spec init([{Task_Type, Type_Max, Timer_History_Count, Slow_Factor}])
+-spec init([{Task_Type, Type_Max, Timer_History_Count, Slow_Factor_As_Percentage}])
           -> boolean() | {error, init_already_executed}
                  | {error, {invalid_init_args, list()}} when
       Task_Type :: task_type(),
       Type_Max  :: cxy_limit(),
       Timer_History_Count :: non_neg_integer(),
-      Slow_Factor :: 101 .. 100000.
+      Slow_Factor_As_Percentage :: 101 .. 100000.
 
 init(Limits) ->
     case ets:info(?MODULE, name) of
@@ -224,11 +224,13 @@ init(Limits) ->
             end
     end.
 
-valid_limits({Type, Max_Procs, History_Count, Slow_Factor} = Limit,
-             {Buffer_Params, Cxy_Params, Errors}           = Results)
+valid_limits({Type, Max_Procs, History_Count, Slow_Factor_As_Percentage} = Limit,
+             {Buffer_Params, Cxy_Params, Errors} = Results)
   when is_atom(Type),
-       is_integer(History_Count), History_Count >=   0,
-       is_integer(Slow_Factor),   Slow_Factor   >= 101, Slow_Factor =< 100000 ->
+       is_integer(History_Count), History_Count >= 0,
+       is_integer(Slow_Factor_As_Percentage),
+       Slow_Factor_As_Percentage >= 101,
+       Slow_Factor_As_Percentage =< 100000 ->
     case is_valid_limit(Max_Procs) of
         true  -> make_limits(Limit, Results);
         false -> {Buffer_Params, Cxy_Params, [Limit | Errors]}
@@ -236,9 +238,9 @@ valid_limits({Type, Max_Procs, History_Count, Slow_Factor} = Limit,
 valid_limits(Invalid, {Buffer_Params, Cxy_Params, Errors}) ->
     {Buffer_Params, Cxy_Params, [Invalid | Errors]}.
 
-make_limits({Type, Max_Procs, History_Count, Slow_Factor}, {Buffer_Params, Cxy_Params, Errors}) ->
+make_limits({Type, Max_Procs, History_Count, Slow_Factor_As_Percentage}, {Buffer_Params, Cxy_Params, Errors}) ->
     {make_buffer_params(Buffer_Params, Type, History_Count),
-     make_proc_params(Cxy_Params, Type, Max_Procs, History_Count, Slow_Factor), Errors}.
+     make_proc_params(Cxy_Params, Type, Max_Procs, History_Count, Slow_Factor_As_Percentage), Errors}.
     
 make_buffer_slow  (Type) -> list_to_atom("slow_"   ++ atom_to_list(Type)).
 make_buffer_spawn (Type) -> list_to_atom("spawn_"  ++ atom_to_list(Type)).
@@ -253,8 +255,8 @@ make_buffer_params(Acc,  Type, Max_History) ->
      {Slow_Type,   ring, Max_History}
      | Acc].
 
-make_proc_params(Acc, Type, Max_Procs, Max_History, Slow_Factor) ->
-    [make_proc_values(Type, Max_Procs, Max_History, Slow_Factor) | Acc].
+make_proc_params(Acc, Type, Max_Procs, Max_History, Slow_Factor_As_Percentage) ->
+    [make_proc_values(Type, Max_Procs, Max_History, Slow_Factor_As_Percentage) | Acc].
     
     
 do_init(Buffer_Params, Cxy_Params) ->
@@ -263,10 +265,10 @@ do_init(Buffer_Params, Cxy_Params) ->
 
 do_insert_limits(Buffer_Params, Cxy_Cma_Params) ->
     ets_buffer:create(Buffer_Params),
-    [begin
-         ets:insert_new(?MODULE, Cxy_Params),
-         ets:insert_new(?MODULE, Cma_Params)
-     end || {Cxy_Params, Cma_Params} <- Cxy_Cma_Params],
+    _ = [begin
+             ets:insert_new(?MODULE, Cxy_Params),
+             ets:insert_new(?MODULE, Cma_Params)
+         end || {Cxy_Params, Cma_Params} <- Cxy_Cma_Params],
     true.
 
 
