@@ -46,6 +46,7 @@
          delete_item/2,  fetch_item/2,
          refresh_item/2, refresh_item/3,
          fetch_item_version/2,
+         is_cached/2,
          get_and_clear_counts/1
         ]).
 
@@ -313,6 +314,7 @@ replace_check_generation_fun(Cache_Name, Fun)
 -spec refresh_item (cache_name(), cached_key(), {cached_value_vsn(), cached_value()})
                    -> cached_value() | no_value_available | {error, tuple()}.
 -spec fetch_item_version (cache_name(), cached_key()) -> cached_value_vsn() | no_value_available | {error, tuple()}.
+-spec is_cached(cache_name(), cached_key()) -> boolean().
 -spec get_and_clear_counts(cache_name()) -> {cache_name(), proplists:proplist()}.
 
 -define(WHEN_GEN_EXISTS(__Gen_Id, __Code), ets:info(__Gen_Id, type) =:= set andalso __Code).
@@ -393,6 +395,14 @@ fetch_item_version(Cache_Name, Key) ->
                            fetch_gen2_version(Fn_Cache_Name, Fn_Old_Gen_Id, Fn_Key)
                    end,
     access_item(Cache_Name, Key, Found_Fn, Not_Found_Fn, no_value_available).
+
+%% Check if a key is present in the cache, without disturbing the generations or fetching if missing.
+is_cached(Cache_Name, Key) ->
+    case fetch_item_version(Cache_Name, Key) of
+        {error, _}         -> false;
+        no_value_available -> false;
+        _Version           -> true
+    end.
 
 %% Old generation function for getting just the version of a cached value entry.
 fetch_gen2_version(Cache_Name, Old_Gen_Id, Key) ->
