@@ -273,14 +273,15 @@ do_insert_limits(Buffer_Params, Cxy_Cma_Params) ->
     true.
 
 
--spec add_task_types([{Task_Type, Type_Max, Timer_History_Count}])
+-spec add_task_types([{Task_Type, Type_Max, Timer_History_Count, Slow_Factor_As_Percentage}])
                     -> boolean() | {error, {add_duplicate_task_types, list()}} when
       Task_Type :: task_type(),
       Type_Max  :: cxy_limit(),
-      Timer_History_Count :: non_neg_integer().
+      Timer_History_Count :: non_neg_integer(),
+      Slow_Factor_As_Percentage :: 101 .. 100000.
 
 add_task_types(Limits) ->
-    case [Args || Args = {Task_Type, _Max_Procs, _History_Count} <- Limits,
+    case [Args || Args = {Task_Type, _Max_Procs, _History_Count, _Slow_Factor_As_Percentage} <- Limits,
                   ets:lookup(?MODULE, Task_Type) =/= []] of
         [] ->
             %% Validate Limits and construct ring buffer params for each concurrency type...

@@ -53,7 +53,7 @@ end_per_suite(Config)  -> Config.
 
 %% Test Modules is ?TM
 -define(TM, cxy_ctl).
-
+-define(MAX_SLOW_FACTOR, 100000).
 
 -spec check_proc_dict_helper(config()) -> ok.
 check_proc_dict_helper(_Config) ->
@@ -63,54 +63,68 @@ check_proc_dict_helper(_Config) ->
 
 -spec check_no_timer_limits(config()) -> ok.
 check_no_timer_limits(_Config) ->
-    Limits = [{a, 15, 0}, {b, 35, 0}],
+    Limits = [{a, 15, 0, ?MAX_SLOW_FACTOR}, {b, 35, 0, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
-    2 = length(All_Entries),
+    4 = length(All_Entries),
     true = lists:member({a, 15, 0, 0}, All_Entries),
     true = lists:member({b, 35, 0, 0}, All_Entries),
+    true = lists:member({{cma,a}, 0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({{cma,b}, 0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
     ok.
 
 -spec check_with_timer_limits(config()) -> ok.
 check_with_timer_limits(_Config) ->
-    Limits = [{a, 15, 5}, {b, 35, 0}, {c, 17, 4}],
+    Limits = [{a, 15, 5, ?MAX_SLOW_FACTOR}, {b, 35, 0, ?MAX_SLOW_FACTOR}, {c, 17, 4, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
-    3 = length(All_Entries),
+    6 = length(All_Entries),
     true = lists:member({a, 15, 0, 5}, All_Entries),
     true = lists:member({b, 35, 0, 0}, All_Entries),
     true = lists:member({c, 17, 0, 4}, All_Entries),
+    true = lists:member({{cma,a}, 0, 0, 5, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({{cma,b}, 0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({{cma,c}, 0, 0, 4, ?MAX_SLOW_FACTOR}, All_Entries),
     ok.
 
 -spec check_atom_limits(config()) -> ok.
 check_atom_limits(_Config) ->
-    Limits = [{a, unlimited, 0},   {b, unlimited, 5},
-              {c, inline_only, 0}, {d, inline_only, 7}],
+    Limits = [{a, unlimited,   0, ?MAX_SLOW_FACTOR}, {b, unlimited,   5, ?MAX_SLOW_FACTOR},
+              {c, inline_only, 0, ?MAX_SLOW_FACTOR}, {d, inline_only, 7, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
-    4 = length(All_Entries),
+    8 = length(All_Entries),
     true = lists:member({a, -1, 0, 0}, All_Entries),
     true = lists:member({b, -1, 0, 5}, All_Entries),
     true = lists:member({c,  0, 0, 0}, All_Entries),
     true = lists:member({d,  0, 0, 7}, All_Entries),
+    true = lists:member({{cma,a},  0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({{cma,b},  0, 0, 5, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({{cma,c},  0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({{cma,d},  0, 0, 7, ?MAX_SLOW_FACTOR}, All_Entries),
     ok.
 
 -spec check_limit_errors(config()) -> ok.
 check_limit_errors(_Config) ->
-    Limits1 = [{a, unlimited, -1}, {b, 5, 0}, {c, unlimited, 0}],
-    {error, {invalid_init_args, [{a, unlimited, -1}]}} = ?TM:init(Limits1),
-    Limits2 = [{a, unlimited, -1}, {b, foo, 0}, {c, 0, bar}],
+    Limits1 = [{a, unlimited, -1, ?MAX_SLOW_FACTOR},
+               {b, 5, 0, ?MAX_SLOW_FACTOR},
+               {c, unlimited, 0, ?MAX_SLOW_FACTOR}],
+    {error, {invalid_init_args, [{a, unlimited, -1, ?MAX_SLOW_FACTOR}]}} = ?TM:init(Limits1),
+    Limits2 = [{a, unlimited, -1, ?MAX_SLOW_FACTOR},
+               {b, foo, 0, ?MAX_SLOW_FACTOR},
+               {c, 0, bar, ?MAX_SLOW_FACTOR}],
     {error, {invalid_init_args, Limits2}} = ?TM:init(Limits2),
 
     %% Call init with good values to test add/remove/adjust...
-    Limits = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
+    Limits = [{a, unlimited, 0, ?MAX_SLOW_FACTOR}, {b,          17, 5, ?MAX_SLOW_FACTOR},
+              {c,         8, 0, ?MAX_SLOW_FACTOR}, {d, inline_only, 7, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
 
     {error, {add_duplicate_task_types, Limits}} = ?TM:add_task_types(Limits),
-    Limits3 = [{g, foo, 1}, {h, 17, -1}],
+    Limits3 = [{g, foo, 1, ?MAX_SLOW_FACTOR}, {h, 17, -1, ?MAX_SLOW_FACTOR}],
     {error, {invalid_add_args, Limits3}} = ?TM:add_task_types(Limits3),
 
-    Limits3a = [{TT, L} || {TT, L, _H} <- Limits3],
+    Limits3a = [{TT, L} || {TT, L, _H, _Slow} <- Limits3],
     {error, {missing_task_types,  [{g, foo}, {h, 17}]}} = ?TM:adjust_task_limits(Limits3a),
     Limits4 = [{a, foo}, {b, -1}],
     {error, {invalid_task_limits, Limits4}} = ?TM:adjust_task_limits(Limits4),
@@ -118,7 +132,8 @@ check_limit_errors(_Config) ->
 
 -spec check_concurrency_types(config()) -> ok.
 check_concurrency_types(_Config) ->
-    Limits = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
+    Limits = [{a, unlimited, 0, ?MAX_SLOW_FACTOR}, {b,          17, 5, ?MAX_SLOW_FACTOR},
+              {c,         8, 0, ?MAX_SLOW_FACTOR}, {d, inline_only, 7, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     Types = ?TM:concurrency_types(),
     [[a, unlimited, 0, 0], [b, 17, 0, 5], [c, 8, 0, 0], [d, inline_only, 0, 7]]
@@ -131,7 +146,7 @@ check_concurrency_types(_Config) ->
 -spec check_execute_task(config()) -> ok.
 check_execute_task(_Config) ->
     {Inline_Type, Spawn_Type} = {ets_inline, ets_spawn},
-    Limits = [{Inline_Type, inline_only, 2}, {Spawn_Type, 3, 5}],
+    Limits = [{Inline_Type, inline_only, 2, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     Ets_Table = ets:new(check_execute_task, [public, named_table]),
 
@@ -160,7 +175,7 @@ check_execute_task(_Config) ->
 -spec check_maybe_execute_task(config()) -> ok.
 check_maybe_execute_task(_Config) ->
     {Overmax_Type, Spawn_Type} = {ets_overmax, ets_spawn},
-    Limits = [{Overmax_Type, inline_only, 0}, {Spawn_Type, 3, 5}],
+    Limits = [{Overmax_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     Ets_Table = ets:new(check_maybe_execute_task, [public, named_table]),
 
@@ -198,7 +213,7 @@ check_maybe_execute_task(_Config) ->
 -spec check_execute_pid_link(config()) -> ok.
 check_execute_pid_link(_Config) ->
     {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
-    Limits = [{Inline_Type, inline_only, 2}, {Spawn_Type, 3, 5}],
+    Limits = [{Inline_Type, inline_only, 2, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
@@ -235,7 +250,7 @@ check_execute_pid_link(_Config) ->
 -spec check_maybe_execute_pid_link(config()) -> ok.
 check_maybe_execute_pid_link(_Config) ->
     {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
-    Limits = [{Overmax_Type, inline_only, 0}, {Spawn_Type, 3, 5}],
+    Limits = [{Overmax_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
@@ -281,7 +296,7 @@ check_maybe_execute_pid_link(_Config) ->
 -spec check_execute_pid_monitor(config()) -> ok.
 check_execute_pid_monitor(_Config) ->
     {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
-    Limits = [{Inline_Type, inline_only, 0}, {Spawn_Type, 3, 5}],
+    Limits = [{Inline_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
@@ -316,7 +331,7 @@ check_execute_pid_monitor(_Config) ->
 -spec check_maybe_execute_pid_monitor(config()) -> ok.
 check_maybe_execute_pid_monitor(_Config) ->
     {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
-    Limits = [{Overmax_Type, inline_only, 0}, {Spawn_Type, 3, 5}],
+    Limits = [{Overmax_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     
     %% When inline, update our process dictionary...
@@ -359,24 +374,25 @@ check_maybe_execute_pid_monitor(_Config) ->
 
 -spec check_multiple_init_calls(config()) -> ok.
 check_multiple_init_calls(_Config) ->
-    Limits1 = [{a, unlimited, 0}, {b, 17, 5}, {c, 8, 0}, {d, inline_only, 7}],
+    Limits1 = [{a, unlimited, 0, ?MAX_SLOW_FACTOR}, {b,          17, 5, ?MAX_SLOW_FACTOR},
+               {c,         8, 0, ?MAX_SLOW_FACTOR}, {d, inline_only, 7, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits1),
     {error, init_already_executed} = ?TM:init(Limits1),
     {error, init_already_executed} = ?TM:init([]),
 
-    Cxy_Limits = [L || {_, L, _} <- Limits1],
+    Cxy_Limits = [L || {_, L, _, _} <- Limits1],
     Cxy_Limits = [proplists:get_value(max_procs, P) || P <- ?TM:concurrency_types()],
 
-    Dup1 = {b, 217, 15},
-    Dup2 = {d, inline_only, 17},
-    Limits2 = [{f, unlimited, 0}, Dup1, {e, 18, 10}, Dup2],
+    Dup1 = {b, 217, 15, ?MAX_SLOW_FACTOR},
+    Dup2 = {d, inline_only, 17, ?MAX_SLOW_FACTOR},
+    Limits2 = [{f, unlimited, 0, ?MAX_SLOW_FACTOR}, Dup1, {e, 18, 10, ?MAX_SLOW_FACTOR}, Dup2],
     {error, {add_duplicate_task_types, [Dup1, Dup2]}} = ?TM:add_task_types(Limits2),
 
-    Error_Dups = [T || {T, _, _} <- Limits2 -- [Dup1, Dup2]],
-    {error, {missing_task_types, Error_Dups}} = ?TM:remove_task_types([T || {T, _, _} <- Limits2]),
+    Error_Dups = [T || {T, _, _, _} <- Limits2 -- [Dup1, Dup2]],
+    {error, {missing_task_types, Error_Dups}} = ?TM:remove_task_types([T || {T, _, _, _} <- Limits2]),
     2 = ?TM:remove_task_types([element(1,Dup1), element(1,Dup2)]),
-    Missing_Task_Types = [T || {T, _, _} <- Limits2],
-    {error, {missing_task_types, Missing_Task_Types}} = ?TM:remove_task_types([T || {T, _, _} <- Limits2]),
+    Missing_Task_Types = [T || {T, _, _, _} <- Limits2],
+    {error, {missing_task_types, Missing_Task_Types}} = ?TM:remove_task_types([T || {T, _, _, _} <- Limits2]),
     true = ?TM:add_task_types(Limits2),
     {error, {add_duplicate_task_types, Limits1}} = ?TM:add_task_types(Limits1),
 
@@ -410,7 +426,7 @@ fetch_ets_ages(Ets_Table) ->
 -spec check_copying_dict(config()) -> ok.
 check_copying_dict(_Config) ->
     {Inline_Type, Spawn_Type} = {pd_inline, pd_spawn},
-    Limits = [{Inline_Type, inline_only, 2}, {Spawn_Type, 3, 5}],
+    Limits = [{Inline_Type, inline_only, 2, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
     
     %% Init the current process dictionary...
