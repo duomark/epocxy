@@ -57,48 +57,25 @@ make_process_dictionary_default_value(Key, Value) ->
 
 
 %%%------------------------------------------------------------------------------
-%%% Internal interface for maintaining counters and timers in ets table
+%%% Internal interface for maintaining process limits / history counters
 %%%------------------------------------------------------------------------------
 
-%% Use a raw tuple because two record structs with the same key would
-%% be needed, or redundant record name in key position.
+%%% Used raw tuples for ets counters because two record structs with the
+%%% same key would be needed, or redundant record name in key position.
+%%% These tuples are also exposed when the history mechanism is used
+%%% and are made readable by not including redundant record names.
 
-%% Cxy counters tuple...
--define(MAX_PROCS_POS,    2).
--define(ACTIVE_PROCS_POS, 3).
--define(MAX_HISTORY_POS,  4).
-
-%% Cumulative performance moving average tuple...
--define(CMA_TYPE_POS,        1).
--define(CMA_SPAWN_CMA_POS,   2).
--define(CMA_EXEC_CMA_POS,    3).
--define(CMA_RING_SIZE_POS,   4).
--define(CMA_SLOW_FACTOR_POS, 5).
-
-%% Read all values using update_counter to avoid releasing write_lock for a read_lock.
--define(CMA_READ_CMD,
-        [{?CMA_SPAWN_CMA_POS,   0},
-         {?CMA_EXEC_CMA_POS,    0},
-         {?CMA_RING_SIZE_POS,   0},
-         {?CMA_SLOW_FACTOR_POS, 0}
-        ]).
-
-%% Update moving averages using update_element to avoid read_lock.
--define(CMA_WRITE_CMD(__Spawn, __Exec),
-        [{?CMA_SPAWN_CMA_POS, __Spawn},
-         {?CMA_EXEC_CMA_POS,  __Exec}
-        ]).
-
-make_cma_key(Task_Type) ->
-    {cma, Task_Type}.
-
+%%% Cxy process values and cumulative moving avgs are kept in the cxy_ctl ets table as a tuple.
 make_proc_values(Task_Type, Max_Procs_Allowed, Max_History, Slow_Factor_As_Percentage) ->
     Active_Procs = 0,
     Stored_Max_Procs_Value = max_procs_to_int(Max_Procs_Allowed),
+
     %% Cxy counters init tuple...
     {{Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History},
+
      %% Cumulative performance moving average init tuple...
      {make_cma_key(Task_Type), 0, 0, Max_History, Slow_Factor_As_Percentage}}.
+
 
 max_procs_to_int(unlimited)   -> -1;
 max_procs_to_int(inline_only) ->  0;
@@ -114,6 +91,12 @@ is_valid_limit(Max_Procs)
 is_valid_limit(unlimited)   -> true;
 is_valid_limit(inline_only) -> true;
 is_valid_limit(_)           -> false.
+
+%% Locations of cxy counter tuple positions used for ets:update_counter
+%% {Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History}
+-define(MAX_PROCS_POS,    2).
+-define(ACTIVE_PROCS_POS, 3).
+-define(MAX_HISTORY_POS,  4).
     
 incr_active_procs(Task_Type) ->
     ets:update_counter(?MODULE, Task_Type, {?ACTIVE_PROCS_POS, 1}).
@@ -121,6 +104,51 @@ incr_active_procs(Task_Type) ->
 decr_active_procs(Task_Type) ->
     ets:update_counter(?MODULE, Task_Type, {?ACTIVE_PROCS_POS, -1}).
 
+reset_proc_counts(Task_Type) ->
+    ets:update_counter(?MODULE, Task_Type, [{?MAX_PROCS_POS, 0}, {?MAX_HISTORY_POS, 0}]).
+
+change_max_proc_limit(Task_Type, New_Limit) ->
+    ets:update_element(?MODULE, Task_Type, {?MAX_PROCS_POS, max_procs_to_int(New_Limit)}).
+
+
+%%%------------------------------------------------------------------------------
+%%% Internal interface for maintaining moving avgs for slow execution detection
+%%%------------------------------------------------------------------------------
+
+make_cma_key(Task_Type) ->
+    {cma, Task_Type}.
+
+%% Cumulative performance moving average tuple...
+%% {make_cma_key(Task_Type), Spawn_Time_Cma, Execution_Time_Cma, Max_History, Slow_Factor_As_Percentage}
+-define(CMA_SPAWN_CMA_POS,   2).
+-define(CMA_EXEC_CMA_POS,    3).
+-define(CMA_RING_SIZE_POS,   4).
+-define(CMA_SLOW_FACTOR_POS, 5).
+
+%% Read all values using update_counter to avoid releasing write_lock for a read_lock.
+-define(CMA_READ_CMD,
+        [{?CMA_SPAWN_CMA_POS,   0},
+         {?CMA_EXEC_CMA_POS,    0},
+         {?CMA_RING_SIZE_POS,   0},
+         {?CMA_SLOW_FACTOR_POS, 0}
+        ]).
+
+get_cma_factors(Cma_Key) ->
+    ets:update_counter(?MODULE, Cma_Key, ?CMA_READ_CMD).
+
+%% Update moving averages using update_element to avoid read_lock.
+-define(CMA_WRITE_CMD(__Spawn, __Exec),
+        [{?CMA_SPAWN_CMA_POS, __Spawn},
+         {?CMA_EXEC_CMA_POS,  __Exec}
+        ]).
+
+update_cma_avgs(Cma_Key, New_Spawn_Cma, New_Exec_Cma) ->
+    ets:update_element(?MODULE, Cma_Key, ?CMA_WRITE_CMD(New_Spawn_Cma, New_Exec_Cma)).
+
+
+%%%------------------------------------------------------------------------------
+%%% Internal interface for updating execution times / detecting slow execution
+%%%------------------------------------------------------------------------------
 
 -type snap()        :: erlang:timestamp().
 -type exec_triple() :: {module(), atom(), list()}.
@@ -173,13 +201,14 @@ is_slow(Sample_Time, Moving_Avg, Slow_Factor_As_Percentage) ->
     round((Sample_Time / Moving_Avg) * 100) >= Slow_Factor_As_Percentage.
 
 update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
-    %% Use simple moving averages (approximate because of concurrency clobbering as well)...
+
+    %% Fetch, compute and update the moving averages...
     Cma_Key = make_cma_key(Task_Type),
-    [Old_Spawn_Cma, Old_Exec_Cma, Num_Samples, Slow_Factor_As_Percentage]
-        = ets:update_counter(?MODULE, Cma_Key, ?CMA_READ_CMD),
+    [Old_Spawn_Cma, Old_Exec_Cma, Num_Samples, Slow_Factor_As_Percentage] = get_cma_factors(Cma_Key),
     New_Exec_Cma  = cumulative_moving_avg(Old_Exec_Cma,  Exec_Elapsed,  Num_Samples),
     New_Spawn_Cma = cumulative_moving_avg(Old_Spawn_Cma, Spawn_Elapsed, Num_Samples),
-    true = ets:update_element(?MODULE, Cma_Key, ?CMA_WRITE_CMD(New_Spawn_Cma, New_Exec_Cma)),
+    true = update_cma_avgs(Cma_Key, New_Spawn_Cma, New_Exec_Cma),
+
     %% The previous moving averages are returned for comparison.
     {Old_Spawn_Cma, Old_Exec_Cma, Slow_Factor_As_Percentage}.
 
@@ -315,8 +344,7 @@ adjust_task_limits(Task_Limits) ->
         Task_Limits -> case [{Task_Type, Limit} || {Task_Type, Limit} <- Task_Limits, is_valid_limit(Limit)] of
                            Task_Limits  ->
                                Changes = [TL || TL = {Task_Type, New_Limit} <- Task_Limits,
-                                                ets:update_element(?MODULE, Task_Type,
-                                                                   {?MAX_PROCS_POS, max_procs_to_int(New_Limit)})],
+                                                change_max_proc_limit(Task_Type, New_Limit)],
                                length(Changes);
                            Legal_Limits ->
                                {error, {invalid_task_limits, Task_Limits -- Legal_Limits}}
@@ -359,7 +387,7 @@ maybe_execute_task(Task_Type, Mod, Fun, Args, Dict_Props) ->
 
 
 internal_execute_task(Task_Type, Mod, Fun, Args, Over_Limit_Action, Dict_Props) ->
-    [Max, Max_History] = ets:update_counter(?MODULE, Task_Type, [{?MAX_PROCS_POS, 0}, {?MAX_HISTORY_POS, 0}]),
+    [Max, Max_History] = reset_proc_counts(Task_Type),
     Start = Max_History > 0 andalso os:timestamp(),
     case {Max, incr_active_procs(Task_Type)} of
 
@@ -448,7 +476,7 @@ maybe_execute_pid_monitor(Task_Type, Mod, Fun, Args, Dict_Props) ->
 
 
 internal_execute_pid(Task_Type, Mod, Fun, Args, Spawn_Type, Over_Limit_Action, Dict_Props) ->
-    [Max, Max_History] = ets:update_counter(?MODULE, Task_Type, [{?MAX_PROCS_POS, 0}, {?MAX_HISTORY_POS, 0}]),
+    [Max, Max_History] = reset_proc_counts(Task_Type),
     Start = Max_History > 0 andalso os:timestamp(),
     case {Max, incr_active_procs(Task_Type)} of
 
