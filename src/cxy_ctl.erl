@@ -23,7 +23,8 @@
          execute_pid_link/5, execute_pid_monitor/5, 
          maybe_execute_pid_link/4, maybe_execute_pid_monitor/4, 
          maybe_execute_pid_link/5, maybe_execute_pid_monitor/5,
-         concurrency_types/0, history/1, history/3
+         concurrency_types/0, history/1, history/3,
+         slow_calls/1, slow_calls/2
         ]).
 
 -export([make_process_dictionary_default_value/2]).
@@ -598,6 +599,13 @@ history(Task_Type, slow, Num_Items) ->
         Error -> Error
     end.
 
+slow_calls(Task_Type) ->
+    {_Spawns, _Execs, Slow_Calls} = history(Task_Type),
+    Slow_Calls.
+
+slow_calls(Task_Type, Num_Items) ->
+    history(Task_Type, slow, Num_Items).
+    
 get_buffer_times(Buffer_Name) ->
     case ets_buffer:history(Buffer_Name) of
         Times_List when is_list(Times_List) -> [format_buffer_times(Times) || Times <- Times_List];
