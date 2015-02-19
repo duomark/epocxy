@@ -71,7 +71,7 @@ make_proc_values(Task_Type, Max_Procs_Allowed, Max_History, Slow_Factor_As_Perce
     Stored_Max_Procs_Value = max_procs_to_int(Max_Procs_Allowed),
 
     %% Cxy counters init tuple...
-    {{Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History},
+    {{Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History, Slow_Factor_As_Percentage},
 
      %% Cumulative performance moving average init tuple...
      {make_cma_key(Task_Type), 0, 0, Max_History, Slow_Factor_As_Percentage}}.
@@ -93,7 +93,7 @@ is_valid_limit(inline_only) -> true;
 is_valid_limit(_)           -> false.
 
 %% Locations of cxy counter tuple positions used for ets:update_counter
-%% {Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History}
+%% {Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History, Slow_Factor_As_Percentage}
 -define(MAX_PROCS_POS,    2).
 -define(ACTIVE_PROCS_POS, 3).
 -define(MAX_HISTORY_POS,  4).
@@ -568,15 +568,16 @@ fail_wrapper(inline, Call_Data, Stacktrace) -> exit       ({inline_failure, [Cal
 
 %% @doc
 %%    Provide a list of the registered concurrency limit types and their corresponding limit
-%%    values for max_procs, active_procs and max_history size.
+%%    values for max_procs, active_procs, max_history size and slow_factor_as_percentage.
 %% @end
 
 -spec concurrency_types() -> [proplists:proplist()].
 
 concurrency_types() ->
     [[{task_type, Task_Type}, {max_procs, int_to_max_procs(Max_Procs_Allowed)},
-      {active_procs, Active_Procs}, {max_history, Max_History}]
-     || {Task_Type, Max_Procs_Allowed, Active_Procs, Max_History} <- ets:tab2list(?MODULE)].
+      {active_procs, Active_Procs}, {max_history, Max_History}, {slow_factor_as_percentage, Slow_Factor}]
+     || {Task_Type, Max_Procs_Allowed, Active_Procs, Max_History, Slow_Factor} <- ets:tab2list(?MODULE),
+        is_atom(Task_Type)].
 
 
 %% @doc
