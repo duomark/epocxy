@@ -107,7 +107,7 @@
 
 -spec clear  (cache_name()) -> boolean().
 -spec delete (cache_name()) -> boolean().
--spec replace_check_generation_fun(cache_name(), check_gen_fun()) -> true.
+-spec replace_check_generation_fun(cache_name(), check_gen_fun()) -> boolean().
 
 %% Comparators available to gen_fun().
 -spec new_gen_count_threshold(cache_name(), Fetch_Count, Time, Thresh)
@@ -168,8 +168,8 @@ init_meta_index(Cache_Name, Cache_Mod, Threshold_Type, Threshold) ->
 
 %% The singleton metadata table stores records and is indexed on cache_name.
 init_meta_ets_table(#cxy_cache_meta{} = Initial_Metadata) ->
-    ?UNLESS_METADATA(ets:new(?MODULE, [named_table, set, public, {keypos, #cxy_cache_meta.cache_name}])),
-    ?WHEN_METADATA(ets:insert_new(?MODULE, Initial_Metadata)).
+    _ = ?UNLESS_METADATA(ets:new(?MODULE, [named_table, set, public, {keypos, #cxy_cache_meta.cache_name}])),
+    ?DO_METADATA(ets:insert_new(?MODULE, Initial_Metadata)).
 
 
 %% @doc Populate the initial new and old generation caches for a pre-reserved cache_name.    
@@ -290,7 +290,7 @@ delete(Cache_Name)
     case ?GET_METADATA(Cache_Name) of
         [] -> false;
         [#cxy_cache_meta{new_gen=New, old_gen=Old}] ->
-            true = ?DO_METADATA(ets:delete(?MODULE, Cache_Name)),
+            _ = ?DO_METADATA(ets:delete(?MODULE, Cache_Name)),
             _ = [try ets:delete(Tab) catch error:badarg -> skip end || Tab <- [New, Old]],
             true
     end.
@@ -515,14 +515,16 @@ get_and_clear_counts(Cache_Name) ->
                      #cxy_cache_meta.refresh_count,  #cxy_cache_meta.delete_count,
                      #cxy_cache_meta.error_count,    #cxy_cache_meta.miss_count],
     Read_And_Zero = [[{Counter, 0}, {Counter, 0, 0, 0}] || Counter <- Counters],
-    [Gen1_Hits, 0, Gen2_Hits, 0, Refresh_Count, 0, Delete_Count, 0, Error_Count, 0, Miss_Count, 0]
-        = ?DO_METADATA(ets:update_counter(?MODULE, Cache_Name, lists:append(Read_And_Zero))),
-    {Cache_Name, [{gen1_hits,     Gen1_Hits},
-                  {gen2_hits,     Gen2_Hits},
-                  {refresh_count, Refresh_Count},
-                  {delete_count,  Delete_Count},
-                  {error_count,   Error_Count},
-                  {miss_count,    Miss_Count}]}.
+    case ?DO_METADATA(ets:update_counter(?MODULE, Cache_Name, lists:append(Read_And_Zero))) of
+        false -> false;
+        [Gen1_Hits, 0, Gen2_Hits, 0, Refresh_Count, 0, Delete_Count, 0, Error_Count, 0, Miss_Count, 0] ->
+            {Cache_Name, [{gen1_hits,     Gen1_Hits},
+                          {gen2_hits,     Gen2_Hits},
+                          {refresh_count, Refresh_Count},
+                          {delete_count,  Delete_Count},
+                          {error_count,   Error_Count},
+                          {miss_count,    Miss_Count}]}
+    end.
 
 %% Create a new value from the cache Mod:create_key_value(Key) but watch for errors in generating it.
 create_new_value(Cache_Name, New_Gen_Id, Mod, Key) ->
@@ -654,6 +656,6 @@ new_generation(Cache_Name, New_Gen_Id, New_Time, Old_Gen_Id) ->
                    ],
 
     %% Update the metadata record atomically with the new generation info...
-    true = ?DO_METADATA(ets:update_element(?MODULE, Cache_Name, New_Metadata)),
+    _ = ?DO_METADATA(ets:update_element(?MODULE, Cache_Name, New_Metadata)),
     _ = ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id)),
     Empty_Gen_Id.
