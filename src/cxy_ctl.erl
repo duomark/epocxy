@@ -188,17 +188,19 @@ update_times(Task_Table, Task_Type, Task_Fun, Start, Spawn, Done, Check_Slowness
 
 check_if_slow(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
     {Spawn_Cma, Exec_Cma, Slow_Factor_As_Percentage} = update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed),
-    case       is_slow(Spawn_Elapsed, Spawn_Cma, Slow_Factor_As_Percentage)
-        orelse is_slow(Exec_Elapsed,  Exec_Cma,  Slow_Factor_As_Percentage) of
-
-        true  -> is_slow;
-        false -> not_slow
-    end.
+    is_slow(Spawn_Elapsed, Exec_Elapsed, Spawn_Cma, Exec_Cma, Slow_Factor_As_Percentage).
 
 %% Slow_Factor is a percentage, so 300 would be 3x the moving average.
-is_slow(_,                    0,           _) -> false;
-is_slow(Sample_Time, Moving_Avg, Slow_Factor_As_Percentage) ->
-    round((Sample_Time / Moving_Avg) * 100) >= Slow_Factor_As_Percentage.
+%% The slow test combines the spawn time and execution time and compares
+%% that to the sum of the two moving averages.
+is_slow(_This_Spawn, _This_Exec, _Spawn_Cma, 0 = _Exec_Cma, _Slow_Factor_As_Percentage) -> not_slow;
+is_slow( Spawn_Time,  Exec_Time,  Spawn_Cma,      Exec_Cma,  Slow_Factor_As_Percentage) ->
+    Cma_Time  = Spawn_Cma  + Exec_Cma,
+    Full_Time = Spawn_Time + Exec_Time,
+    case round((Full_Time / Cma_Time) * 100) >= Slow_Factor_As_Percentage of
+        false -> not_slow;
+        true  -> is_slow
+    end.
 
 update_cmas(Task_Type, Spawn_Elapsed, Exec_Elapsed) ->
 
