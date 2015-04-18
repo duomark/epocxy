@@ -1,0 +1,80 @@
+<html>
+  <head>
+    Concurrency Fount (cxy_fount.erl)
+  </head>
+  <body>
+    <h2>Description</h2>
+    <p>
+      A concurrency fount is a continuous supply of pre-spawned processes
+      which is restricted by the speed in which the processor can spawn
+      fresh replacements versus the pace at which waiting processes are
+      consumed. Running out of processes is a temporary condition, but
+      is signalled in the return value so that the requester may apply
+      some form of back-pressure or queueing to reduce the spike of
+      consumption until more resources are available.
+    </p>
+    <h2>Purpose</h2>
+    <p>
+      Processes serve a multitude of purposes including:
+    </p>
+    <ul>
+      <li>Encapsulating a transaction</li>
+      <li>Backgrounding slow tasks to improve responsiveness</li>
+      <li>Firewalling potential faults from other components</li>
+      <li>Providing an asynchronous or synchronous service</li>
+    </ul>
+    <p>
+      A concurrency fount can be used when processes may be needed
+      quickly or in a system where demand expands and contracts.
+      The fount attempts to amortize the cost in CPU and memory
+      pressure so that spikes in demand do not compound heavy
+      server load. Because used processes are replaced as quickly
+      as possible, there will still be pressure on the server, but
+      at least while demand first spikes, the necessary resources are
+      already available. Sustained demand will outstrip the supply of
+      pre-spawned processes.
+    </p>
+    <h2>Implementation</h2>
+    <p>
+      A cxy_fount is an instance of a gen_fsm with slab allocated
+      layers of processes. The top layer is the <em>fount</em> and
+      the lower layers are the <em>reservoir</em>. On initialization,
+      the caller specifies the maximum count of processes in a slab,
+      and the depth of the reservoir including the fount. When a slab
+      of processes is spawned, it happens inside a separate newly
+      spawned process to isolate the action and allow bulk delivery
+      of a slab in a single message, and to allow all slabs to be
+      allocated in parallel. All spawned slab members are linked to
+      the cxy_fount gen_fsm so that they will be destroyed if the
+      gen_fsm is killed by its supervisor.
+    </p>
+    <p>
+      When a process is needed, it is fetched from the front of the
+      fount, optionally sent a message, and unlinked from the cxy_fount
+      instance. The unlinking happens because the caller is expected
+      to manage the life cycle and monitoring of the process once it
+      is tasked with computation. The cxy_fount is only responsible
+      for cleaning up spawned processes while they are still idle.
+    </p>
+    <p>
+      When a process is requested after the internal fount is exhausted,
+      the top layer of the reservoir is moved to the fount, the first
+      item is fetched, and a new process is spawn_linked to generate a
+      replacement slab. The reservoir is maintained as a push-down
+      stack for efficiency with the oldest spawned processes submerged
+      at the bottom of the reservoir.
+    </p>
+    <p>
+      A behaviour is provided by the implementer when using a cxy_fount
+      in an application. The behaviour specifies what type of process
+      is used, typically differentiating between an OTP-compliant process
+      versus a bare process. If an OTP-compliant process is desired,
+      servers which are idle in the fount for a long enough period may
+      be hibernated to save memory. This is a feature that must be
+      thoroughly tested in your own environment because when the demand
+      spikes, stale processes will have to come out of hibernation and
+      that imposes two full garbage collections which may add to the
+      CPU pressure depending on the complexity of the internal state.
+    </p>
+  </body>
+</html>
