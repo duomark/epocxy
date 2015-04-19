@@ -66,11 +66,12 @@
 -type fount_ref() :: pid() | atom().  % gen_fsm reference
 -export_type([fount_ref/0]).
 
--callback start_pid (fount_ref()) -> pid() | {error, Reason::any()}.
--callback send_msg  (pid(), module(), tuple()) -> pid() | {error, Info::tuple()} | empty.
+-callback start_pid (fount_ref())     ->   pid()  | {error, Reason::any()}.
+-callback send_msg  (Worker, tuple()) -> [Worker] | {error, Reason::any()} | []
+                                             when Worker :: pid().
 
 default_num_slabs()      ->   5.
-default_slab_size()      -> 10.
+default_slab_size()      ->  10.
 default_notify_timeout() -> 500.
 
 
@@ -125,14 +126,14 @@ start_link(Fount_Name, Fount_Behaviour, Slab_Size, Reservoir_Depth)
 %%     gen_fsm:sync_send_all_event(Fount, {reinit, Fount_Behaviour, Slab_Size, Reservoir_Depth}).
 
 
--spec task_pid (fount_ref(), tuple()) -> [pid()].
+-spec task_pid (fount_ref(), tuple()) -> [pid()] | {error, any()}.
 
 task_pid(Fount, Msg) ->
     gen_fsm:sync_send_event(Fount, {task_pid, Msg}, default_notify_timeout()).
 
 
--spec get_pid  (fount_ref())                -> [pid()].
--spec get_pids (fount_ref(), pos_integer()) -> [pid()].
+-spec get_pid  (fount_ref())                -> [pid()] | {error, any()}.
+-spec get_pids (fount_ref(), pos_integer()) -> [pid()] | {error, any()}.
 
 get_pid(Fount) ->
     gen_fsm:sync_send_event(Fount, {get_pids, 1}, default_notify_timeout()).
@@ -201,7 +202,8 @@ allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
  when is_pid(Parent_Pid),       is_atom(Module),
       is_integer(Num_To_Spawn), Num_To_Spawn > 0 ->
 
-    %% TODO: Needs a link command?
+    %% Module behaviour needs to explicitly link to the parent_pid,
+    %% since this function is executing in the caller's process space.
     case Module:start_pid(Parent_Pid) of
         Allocated_Pid when is_pid(Allocated_Pid) ->
             allocate_slab(Parent_Pid, Module, Num_To_Spawn-1, [Allocated_Pid | Slab])
