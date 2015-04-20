@@ -23,36 +23,10 @@
 
 %%% Test case exports
 -export([
-         check_construction/1, check_no_failures/1
+         check_construction/1, check_edge_pid_allocs/1, check_no_failures/1
         ]).
 
 -include("epocxy_common_test.hrl").
-
-
-%%%===================================================================
-%%% Fount worker behaviour
-%%%===================================================================
--behaviour(cxy_fount).
--export([start_pid/1, send_msg/2]).
--export([]).
-
-start_pid (Fount)       -> spawn      (fun() -> link(Fount), wait_for_hello() end).
-send_msg  (Worker, Msg) -> spawn_link (fun() -> say_to(Worker, Msg) end).
-
-%% Idle workers may wait a while before being used in a test.
-wait_for_hello() ->
-    receive {Ref, From, hello} -> From ! {Ref, goodbye, now()}
-    after 30000 -> wait_for_hello_timeout
-    end.
-
-%% Just verify the goodbye response comes after saying hello.
-say_to(Worker, Msg) ->
-    Ref = make_ref(),
-    Now1 = now(),
-    Worker ! {Ref, self(), Msg},
-    receive {Ref, goodbye, Now2} -> true = Now1 < Now2
-    after 1000 -> throw(say_hello_timeout)
-    end.
 
 
 %%%===================================================================
@@ -64,12 +38,13 @@ say_to(Worker, Msg) ->
 
 -spec all() -> [test_case() | {group, test_group()}].
 all() -> [
-          {group, check_create}                % Verify construction and reservoir refill.
+          {group, check_create}   % Verify construction and reservoir refill.
          ].
 
 -spec groups() -> [{test_group(), [sequence], [test_case() | {group, test_group()}]}].
 groups() -> [
-             {check_create,  [sequence], [check_construction, check_no_failures]}
+             {check_create,  [sequence],
+              [check_construction, check_edge_pid_allocs, check_no_failures]}
             ].
 
 
@@ -95,51 +70,118 @@ end_per_testcase  (_Test_Case, Config) -> Config.
 %% Test Modules is ?TM
 -define(TM, cxy_fount).
 
+%%%===================================================================
+%%% check_construction/1
+%%%===================================================================
 -spec check_construction(config()) -> ok.
 check_construction(_Config) ->
-    ct:comment("Check that founts can be constructed and refill fully"),
-    Hello_Behaviour = ?MODULE,
+    Test = "Check that founts can be constructed and refill fully",
+    ct:comment(Test), ct:log(Test),
+    Hello_Behaviour = cxy_fount_hello_behaviour,
 
-    ct:comment("Verify construction results in a full reservoir"),
+    Case1 = "Verify construction results in a full reservoir",
+    ct:comment(Case1), ct:log(Case1),
     Depth = 3,
     Slab_Size = 5,
     Full_Fount_Size = Slab_Size * Depth,
     {ok, Fount} = ?TM:start_link(Hello_Behaviour, Slab_Size, Depth),
-    full = verify_reservoir_is_full(Fount, Full_Fount_Size),
+    full = verify_reservoir_is_full(Fount),
 
-    ct:comment("Verify that an empty fount refills itself"),
+    Case2 = "Verify that an empty fount refills itself",
+    ct:comment(Case2), ct:log(Case2),
     Pids1 = ?TM:get_pids(Fount, Full_Fount_Size),
-    full = verify_reservoir_is_full(Fount, Full_Fount_Size),
+    full = verify_reservoir_is_full(Fount),
     Pids2 = ?TM:get_pids(Fount, Full_Fount_Size),
-    full = verify_reservoir_is_full(Fount, Full_Fount_Size),
+    full = verify_reservoir_is_full(Fount),
 
-    ct:comment("Verify that fetches get different pids"),
-    true = Pids1 -- Pids2 =:= Pids1,
-    true = Pids2 -- Pids1 =:= Pids2,
+    Case3 = "Verify that fetches get different pids",
+    ct:comment(Case3), ct:log(Case3),
+    true = sets:is_disjoint(sets:from_list(Pids1), sets:from_list(Pids2)),
 
-    ct:comment("Fount construction verified"),
+    Test_Complete = "Fount construction verified",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
-verify_reservoir_is_full(Fount, Capacity) ->
-    {'FULL', Capacity, Capacity, Loop_Count} =
-        lists:foldl(fun full_fn/2, {'INIT', Capacity, 0, 0}, lists:duplicate(10, Fount)),
+verify_reservoir_is_full(Fount) ->
+    {'FULL', Loop_Count} = lists:foldl(fun full_fn/2, {'INIT', 0}, lists:duplicate(10, Fount)),
     ct:log("Loops to detect a full reservoir: ~p~n", [Loop_Count]),
     full.
 
-full_fn(_Pid, {'FULL',  Capacity,      Capacity, Count}) ->
-    {'FULL', Capacity, Capacity, Count};
-full_fn( Pid, {_Status, Capacity, _Not_Capacity, Count}) ->
+full_fn(_Pid, { 'FULL', Count}) -> {'FULL', Count};
+full_fn( Pid, {_Status, Count}) ->
     erlang:yield(),
     Status = ?TM:get_status(Pid),
-    {proplists:get_value(current_state, Status),
-     Capacity,
-     proplists:get_value(pid_count,     Status),
-     Count+1}.
+    {proplists:get_value(current_state, Status), Count+1}.
 
+
+%%%===================================================================
+%%% check_edge_pid_allocs/1 looks for simple edge case number of pids
+%%%===================================================================
+-spec check_edge_pid_allocs(config()) -> ok.
+check_edge_pid_allocs(_Config) ->
+    Test = "Check that founts can dole out various sized lists of pids",
+    ct:comment(Test), ct:log(Test),
+    Hello_Behaviour = cxy_fount_hello_behaviour,
+
+    Case1 = "Verify construction results in a full reservoir",
+    ct:comment(Case1), ct:log(Case1),
+    Depth = 7,
+    Slab_Size = 4,
+    {ok, Fount} = ?TM:start_link(Hello_Behaviour, Slab_Size, Depth),
+    full = verify_reservoir_is_full(Fount),
+
+    Case2 = "Verify allocation in slab multiples",
+    ct:comment(Case2), ct:log(Case2),
+    Pids1 = ?TM:get_pids(Fount, Slab_Size),
+    full = verify_reservoir_is_full(Fount),
+    Pids2 = ?TM:get_pids(Fount, Slab_Size * 2),
+    full = verify_reservoir_is_full(Fount),
+    Pids3 = ?TM:get_pids(Fount, Slab_Size * 3),
+    full = verify_reservoir_is_full(Fount),
+
+    Pids4 = [?TM:get_pid(Fount), ?TM:get_pid(Fount)],
+    Pids5 = ?TM:get_pids(Fount, Slab_Size),
+    full = verify_reservoir_is_full(Fount),
+    Pids6 = ?TM:get_pids(Fount, Slab_Size * 2),
+    full = verify_reservoir_is_full(Fount),
+    Pids7 = ?TM:get_pids(Fount, Slab_Size * 3),
+    full = verify_reservoir_is_full(Fount),
+
+    %% Make sure all pids are unique
+    All_Pids = lists:append([Pids1, Pids2, Pids3, Pids4, Pids5, Pids6, Pids7]),
+    Num_Pids = length(All_Pids),
+    Num_Pids = sets:size(sets:from_list(All_Pids)),
+    
+    Case3 = "Verify allocation in < slab counts",
+    ct:comment(Case3), ct:log(Case3),
+    Pids8 = ?TM:get_pids(Fount, 3),
+    Pids9 = ?TM:get_pids(Fount, 2),
+    {3,2} = {length(Pids8), length(Pids9)},
+    true = sets:is_disjoint(sets:from_list(Pids8), sets:from_list(Pids9)),
+    full = verify_reservoir_is_full(Fount),
+
+    Case4 = "Verify allocation in > slab counts",
+    ct:comment(Case4), ct:log(Case4),
+    Pids10 = ?TM:get_pids(Fount, 13),
+    Pids11 = ?TM:get_pids(Fount, 7),
+    {13,7} = {length(Pids10), length(Pids11)},
+    true = sets:is_disjoint(sets:from_list(Pids10), sets:from_list(Pids11)),
+    ct:log("State: ~p", [?TM:get_status(Fount)]),
+    full = verify_reservoir_is_full(Fount),
+
+    Test_Complete = "Fount pid allocation verified",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
+    ok.
+        
+
+%%%===================================================================
+%%% check_no_failures/1
+%%%===================================================================
 -spec check_no_failures(config()) -> ok.
 check_no_failures(_Config) ->
     ct:comment("Check that repeated fount requests don't cause failure"),
-    Hello_Behaviour = ?MODULE,
-
-    ct:comment("No failures detected"),
+    Hello_Behaviour = cxy_fount_hello_behaviour,
+    
+    Test_Complete = "No failures detected",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.

@@ -55,10 +55,10 @@
           behaviour        :: module(),
           fount       = [] :: [pid()],
           reservoir   = [] :: [[pid()]],
-          fount_count = 0  :: non_neg_integer(),
-          num_slabs   = 0  :: non_neg_integer(),
-          depth       = 0  :: non_neg_integer(),
-          slab_size        :: pos_integer()
+          fount_count = 0  :: non_neg_integer(),   % Num pids in fount
+          num_slabs   = 0  :: non_neg_integer(),   % Num slabs in reservoir
+          depth       = 0  :: non_neg_integer(),   % Desired reservoir slabs + 1 for fount
+          slab_size        :: pos_integer()        % Num pids in a single slab
         }).
 -type cf_state() :: #cf_state{}.
 
@@ -190,7 +190,7 @@ spawn_allocators(Num_Allocators,  Slab_Args) ->
     
 %%% Rely on the client behaviour to create new pids. This means using
 %%% spawn or any of the gen_*:start patterns since the pids are unsupervised.
-%%% The resulting pids are linked to the cxy_fount parent so that they are
+%%% The resulting pids must be linked to the cxy_fount parent so that they are
 %%% destroyed if the parent terminates. While idle, the slab allocated pids
 %%% should avoid crashing because they can take out the entire cxy_fount.
 %%% Once a pid receives a task_pid command, it becomes unlinked and free to
@@ -203,7 +203,8 @@ allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
       is_integer(Num_To_Spawn), Num_To_Spawn > 0 ->
 
     %% Module behaviour needs to explicitly link to the parent_pid,
-    %% since this function is executing in the caller's process space.
+    %% since this function is executing in the caller's process space,
+    %% rather than the gen_fsm of the cxy_fount parent_pid process space.
     case Module:start_pid(Parent_Pid) of
         Allocated_Pid when is_pid(Allocated_Pid) ->
             allocate_slab(Parent_Pid, Module, Num_To_Spawn-1, [Allocated_Pid | Slab])
@@ -231,26 +232,24 @@ allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
 'FULL'  (_Event,        #cf_state{} = State) -> {next_state, 'FULL',   State}.
 
 
-%%% Slabs are added to the fount first...
-add_slab(#cf_state{fount=[], reservoir=Slabs, depth=Depth, slab_size=Slab_Size} = State,
-         [_Pid | _More] = Pids) when is_pid(_Pid) ->
+%%% Slabs are added to the fount first if reservoir is full...
+add_slab(#cf_state{fount=[], depth=Depth, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
+         [_Pid | _More] = Pids) when is_pid(_Pid), Depth =:= Num_Slabs + 1 ->
 
     %% Goal depth is reservoir depth + 1 for the fount (which just arrived)
-    Next_State_Fn = slab_state(Depth, length(Slabs) + 1),
-    {next_state, Next_State_Fn, State#cf_state{fount=Pids, fount_count=Slab_Size}};
+    {next_state, 'FULL', State#cf_state{fount=Pids, fount_count=Slab_Size}};
 
 %%% Then to the reservoir of untapped slabs.
-add_slab(#cf_state{reservoir=Slabs, depth=Depth, num_slabs=Num_Slabs} = State,
+add_slab(#cf_state{fount=Fount, reservoir=Slabs, depth=Depth, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
          [_Pid | _More] = Pids) when is_pid(_Pid) ->
 
     %% Goal depth includes the fount (even if partial) and the new_slab being received
-    Next_State_Fn = slab_state(Depth, length(Slabs) + 2),
-    {next_state, Next_State_Fn, State#cf_state{reservoir=[Pids | Slabs], num_slabs=Num_Slabs+1}}.
-
-%% Crash if the stack of slabs ever exceeds the goal depth.
-slab_state(Goal_Depth,   Goal_Depth) -> 'FULL';
-slab_state(Goal_Depth, Actual_Depth)
-  when Goal_Depth > Actual_Depth     -> 'LOW'.
+    %% Crash if the stack of slabs ever exceeds the goal depth.
+    case {Fount, Depth > Num_Slabs + 2} of
+        {[],     _} -> {next_state, 'LOW',  State#cf_state{fount=Pids, fount_count=Slab_Size}};
+        { _,  true} -> {next_state, 'LOW',  State#cf_state{reservoir=[Pids | Slabs], num_slabs=Num_Slabs+1}};
+        { _, false} -> {next_state, 'FULL', State#cf_state{reservoir=[Pids | Slabs], num_slabs=Num_Slabs+1}}
+    end.
     
 
 %%%------------------------------------------------------------------------------
@@ -304,9 +303,13 @@ replace_slab_then_return_pid(Pid, #cf_state{behaviour=Mod, slab_size=Slab_Size, 
     {reply, [Pid], New_State_Fn, State#cf_state{fount=[], fount_count=0}}.
 
 
+%%%------------------------------------------------------------------------------
+%%% get_pids responds with the desired worker list of pid()
+%%%------------------------------------------------------------------------------
+
 %% 0 Pids wanted...
 get_pids (0, #cf_state{} = State, State_Fn) -> {reply, [], State_Fn, State};
-
+ 
 %% 1 Pid wanted...
 get_pids (1, #cf_state{fount=[Pid]                       } = State, _State_Fn) -> replace_slab_then_return_pid(Pid, State);
 get_pids (1, #cf_state{fount=[Pid | More], fount_count=FC} = State,  State_Fn) -> {reply, [Pid], State_Fn, State#cf_state{fount=More, fount_count=FC-1}};
@@ -316,11 +319,14 @@ get_pids (1, #cf_state{fount=[], num_slabs=Num_Slabs, slab_size=Slab_Size} = Sta
 
 %% More than 1 pid wanted, can be supplied by Fount...
 %% (Fount might be greater than slab_size, so this clause comes before slab checks)
-get_pids (Num_Pids, #cf_state{fount_count=FC} = State, State_Name)
+get_pids (Num_Pids, #cf_state{fount_count=FC, num_slabs=Num_Slabs} = State, _State_Name)
   when Num_Pids =:= FC ->
     #cf_state{behaviour=Mod, fount=Fount, slab_size=Slab_Size} = State,
     replace_slabs(Mod, 1, Slab_Size),
-    {reply, Fount, State_Name, State#cf_state{fount=[], fount_count=0}};
+    case Num_Slabs of
+        0 -> {reply, Fount, 'EMPTY', State#cf_state{fount=[], fount_count=0}};
+        _ -> {reply, Fount, 'LOW',   State#cf_state{fount=[], fount_count=0}}
+    end;
 
 get_pids (Num_Pids, #cf_state{fount_count=FC} = State, State_Name)
   when Num_Pids < FC ->
@@ -340,14 +346,14 @@ get_pids (Num_Pids, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State,
   when Num_Pids < Slab_Size, Num_Slabs > 0 ->
     #cf_state{behaviour=Mod, fount=Fount, fount_count=FC, reservoir=[Slab | More_Slabs]} = State,
     replace_slabs(Mod, 1, Slab_Size),
-    [Pids | Remaining] = lists:split(Num_Pids, Slab),
+    {Pids, Remaining} = lists:split(Num_Pids, Slab),
     Partial_Slab_Size = Slab_Size - Num_Pids,
     Fount_Count = FC + Partial_Slab_Size,
 
     %% Try to be efficient about reconstructing Fount (may end up larger than a slab)...
     New_Fount = case Partial_Slab_Size > FC of
-                    true  -> [Fount ++ Remaining];
-                    false -> [Remaining ++ Fount]
+                    true  -> Fount ++ Remaining;
+                    false -> Remaining ++ Fount
                 end,
     {reply, Pids, 'LOW', State#cf_state{fount=New_Fount, fount_count=Fount_Count, reservoir=More_Slabs, num_slabs=Num_Slabs-1}};
 
@@ -368,12 +374,16 @@ get_pids (Num_Pids, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num
     {{Pids, Remaining_Fount}, {Slabs_Requested, Remaining_Slabs}, {New_Fount_Count, New_Num_Slabs}}
         = case FC >= Excess of
               true  -> {lists:split(Excess, Fount),               lists:split(Slabs_Needed, All_Slabs),  {FC - Excess,             Num_Slabs - Slabs_Needed}};
-              false -> {lists:split(Excess, Fount ++ First_Slab), lists:split(Slabs_Needed, More_Slabs), {FC + Slab_Size - Excess, Num_Slabs - Slabs_Needed - 1}}
+              false -> {lists:split(Excess, First_Slab ++ Fount), lists:split(Slabs_Needed, More_Slabs), {FC + Slab_Size - Excess, Num_Slabs - Slabs_Needed - 1}}
           end,
     Pids_Requested = lists:append([Pids | Slabs_Requested]),
+
+    %% We might need one more slab replacement...
+    New_Fount_Count =/= 0
+        orelse replace_slabs(Mod, 1, Slab_Size),
     {reply, Pids_Requested, 'LOW', State#cf_state{fount=Remaining_Fount, fount_count=New_Fount_Count, reservoir=Remaining_Slabs, num_slabs=New_Num_Slabs}};
 
-%% All the pids wanted, change to the EMPTY state...
+%% All the pids wanted, change to the EMPTY state.
 get_pids (Num_Pids, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State, _State_Name)
   when Num_Pids =:= (Num_Slabs * Slab_Size) + FC ->
     #cf_state{behaviour=Mod, fount=Fount, reservoir=Reservoir} = State, 
