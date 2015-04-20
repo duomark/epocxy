@@ -64,15 +64,41 @@ end_per_suite(Config)  -> Config.
 
 -spec check_construction(config()) -> ok.
 check_construction(_Config) ->
+    ct:comment("Check that founts can be constructed and refill fully"),
     Hello_Behaviour = ?MODULE,
-    {ok, Fount} = ?TM:start_link(Hello_Behaviour, 5, 3),
-    ['FULL', 15, Loop_Count] =
-        lists:foldl(fun(_Pid, ['FULL', 15, Count]) -> ['FULL', 15, Count];
-                       (_Pid, [_Status, _, Count]) ->
-                            erlang:yield(),
-                            Status = ?TM:get_status(Fount),
-                            [proplists:get_value(E, Status) || E <- [current_state, pid_count]]
-                                ++ [Count+1]
-                    end, ['INIT', 0, 0], lists:duplicate(10, Fount)),
-    ct:log("Loops to detect a full reservoir: ~p~n", [Loop_Count]),
+
+    ct:comment("Verify construction results in a full reservoir"),
+    Depth = 3,
+    Slab_Size = 5,
+    Full_Fount_Size = Slab_Size * Depth,
+    {ok, Fount} = ?TM:start_link(Hello_Behaviour, Slab_Size, Depth),
+    full = verify_reservoir_is_full(Fount, Full_Fount_Size),
+
+    ct:comment("Verify that an empty fount refills itself"),
+    Pids1 = ?TM:get_pids(Fount, Full_Fount_Size),
+    full = verify_reservoir_is_full(Fount, Full_Fount_Size),
+    Pids2 = ?TM:get_pids(Fount, Full_Fount_Size),
+    full = verify_reservoir_is_full(Fount, Full_Fount_Size),
+
+    ct:comment("Verify that fetches get different pids"),
+    true = Pids1 -- Pids2 =:= Pids1,
+    true = Pids2 -- Pids1 =:= Pids2,
+
+    ct:comment("Fount construction verified"),
     ok.
+
+verify_reservoir_is_full(Fount, Capacity) ->
+    {'FULL', Capacity, Capacity, Loop_Count} =
+        lists:foldl(fun full_fn/2, {'INIT', Capacity, 0, 0}, lists:duplicate(10, Fount)),
+    ct:log("Loops to detect a full reservoir: ~p~n", [Loop_Count]),
+    full.
+
+full_fn(_Pid, {'FULL',  Capacity,      Capacity, Count}) ->
+    {'FULL', Capacity, Capacity, Count};
+full_fn( Pid, {_Status, Capacity, _Not_Capacity, Count}) ->
+    erlang:yield(),
+    Status = ?TM:get_status(Pid),
+    {proplists:get_value(current_state, Status),
+     Capacity,
+     proplists:get_value(pid_count,     Status),
+     Count+1}.
