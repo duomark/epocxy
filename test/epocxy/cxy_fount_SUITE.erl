@@ -14,8 +14,20 @@
 -auth('jay@duomark.com').
 -vsn('').
 
--export([all/0, init_per_suite/1, end_per_suite/1]).
--export([check_construction/1]).
+%%% Common_test exports
+-export([all/0, groups/0,
+         init_per_suite/1,    end_per_suite/1,
+         init_per_group/1,    end_per_group/1,
+         init_per_testcase/2, end_per_testcase/2
+        ]).
+
+%%% Test case exports
+-export([
+         check_construction/1, check_no_failures/1
+        ]).
+
+-include("epocxy_common_test.hrl").
+
 
 %%%===================================================================
 %%% Fount worker behaviour
@@ -46,18 +58,39 @@ say_to(Worker, Msg) ->
 %%%===================================================================
 %%% Test cases
 %%%===================================================================
--include_lib("common_test/include/ct.hrl").
 
--spec all() -> [atom()].
+-type test_case()  :: atom().
+-type test_group() :: atom().
 
-all() -> [check_construction].
+-spec all() -> [test_case() | {group, test_group()}].
+all() -> [
+          {group, check_create}                % Verify construction and reservoir refill.
+         ].
+
+-spec groups() -> [{test_group(), [sequence], [test_case() | {group, test_group()}]}].
+groups() -> [
+             {check_create,  [sequence], [check_construction, check_no_failures]}
+            ].
+
 
 -type config() :: proplists:proplist().
--spec init_per_suite(config()) -> config().
--spec end_per_suite(config()) -> config().
+-spec init_per_suite (config()) -> config().
+-spec end_per_suite  (config()) -> config().
 
-init_per_suite(Config) -> Config.
-end_per_suite(Config)  -> Config.
+init_per_suite (Config) -> Config.
+end_per_suite  (Config)  -> Config.
+
+-spec init_per_group (config()) -> config().
+-spec end_per_group  (config()) -> config().
+
+init_per_group (Config) -> Config.
+end_per_group  (Config) -> Config.
+
+-spec init_per_testcase (atom(), config()) -> config().
+-spec end_per_testcase  (atom(), config()) -> config().
+
+init_per_testcase (_Test_Case, Config) -> Config.
+end_per_testcase  (_Test_Case, Config) -> Config.
 
 %% Test Modules is ?TM
 -define(TM, cxy_fount).
@@ -102,3 +135,11 @@ full_fn( Pid, {_Status, Capacity, _Not_Capacity, Count}) ->
      Capacity,
      proplists:get_value(pid_count,     Status),
      Count+1}.
+
+-spec check_no_failures(config()) -> ok.
+check_no_failures(_Config) ->
+    ct:comment("Check that repeated fount requests don't cause failure"),
+    Hello_Behaviour = ?MODULE,
+
+    ct:comment("No failures detected"),
+    ok.
