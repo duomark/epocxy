@@ -215,7 +215,6 @@ validate_get_pids(Fount, Num_Pids, Max_Available) ->
                  [begin
                       {links, Links} = process_info(Pid, links),
                       false = lists:member(Pid, Links)
-%% ,                      exit(Pid, kill)
                   end || Pid <- Pids],
 
                  %% check that the reservoir is 'FULL' again
