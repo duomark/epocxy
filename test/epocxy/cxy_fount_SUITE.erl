@@ -77,22 +77,18 @@ end_per_testcase  (_Test_Case, Config) -> Config.
 check_construction(_Config) ->
     Test = "Check that founts can be constructed and refill fully",
     ct:comment(Test), ct:log(Test),
-    Hello_Behaviour = cxy_fount_hello_behaviour,
 
     Case1 = "Verify construction results in a full reservoir",
     ct:comment(Case1), ct:log(Case1),
-    Depth = 3,
-    Slab_Size = 5,
-    Full_Fount_Size = Slab_Size * Depth,
-    {ok, Fount} = ?TM:start_link(Hello_Behaviour, Slab_Size, Depth),
-    full = verify_reservoir_is_full(Fount),
+    Fount = start_fount(cxy_fount_hello_behaviour, 3, 5),
+    Full_Fount_Size = 3 * 5,
 
     Case2 = "Verify that an empty fount refills itself",
     ct:comment(Case2), ct:log(Case2),
     Pids1 = ?TM:get_pids(Fount, Full_Fount_Size),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
     Pids2 = ?TM:get_pids(Fount, Full_Fount_Size),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
 
     Case3 = "Verify that fetches get different pids",
     ct:comment(Case3), ct:log(Case3),
@@ -102,10 +98,20 @@ check_construction(_Config) ->
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
+start_fount(Behaviour, Slab_Size, Depth) ->
+    {ok, Fount} = ?TM:start_link(Behaviour, Slab_Size, Depth),
+    'FULL' = verify_reservoir_is_full(Fount),
+    Fount.
+
 verify_reservoir_is_full(Fount) ->
-    {'FULL', Loop_Count} = lists:foldl(fun full_fn/2, {'INIT', 0}, lists:duplicate(10, Fount)),
-    ct:log("Loops to detect a full reservoir: ~p~n", [Loop_Count]),
-    full.
+    Final_State = case lists:foldl(fun full_fn/2, {'INIT', 0}, lists:duplicate(10, Fount)) of
+                      {'FULL',  _Num_Times} = State -> State;
+                      {_Other,  _Num_Times} = State -> ct:log("Failed state: ~p",
+                                                              [sys:get_state(Fount)]),
+                                                       State
+                  end,
+    ct:log("Loops to detect a full reservoir: ~p~n", [Final_State]),
+    element(1, Final_State).
 
 full_fn(_Pid, { 'FULL', Count}) -> {'FULL', Count};
 full_fn( Pid, {_Status, Count}) ->
@@ -121,31 +127,28 @@ full_fn( Pid, {_Status, Count}) ->
 check_edge_pid_allocs(_Config) ->
     Test = "Check that founts can dole out various sized lists of pids",
     ct:comment(Test), ct:log(Test),
-    Hello_Behaviour = cxy_fount_hello_behaviour,
 
     Case1 = "Verify construction results in a full reservoir",
     ct:comment(Case1), ct:log(Case1),
-    Depth = 7,
-    Slab_Size = 4,
-    {ok, Fount} = ?TM:start_link(Hello_Behaviour, Slab_Size, Depth),
-    full = verify_reservoir_is_full(Fount),
+    Slab_Size = 4, Depth = 7,
+    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
 
     Case2 = "Verify allocation in slab multiples",
     ct:comment(Case2), ct:log(Case2),
     Pids1 = ?TM:get_pids(Fount, Slab_Size),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
     Pids2 = ?TM:get_pids(Fount, Slab_Size * 2),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
     Pids3 = ?TM:get_pids(Fount, Slab_Size * 3),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
 
     Pids4 = [?TM:get_pid(Fount), ?TM:get_pid(Fount)],
     Pids5 = ?TM:get_pids(Fount, Slab_Size),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
     Pids6 = ?TM:get_pids(Fount, Slab_Size * 2),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
     Pids7 = ?TM:get_pids(Fount, Slab_Size * 3),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
 
     %% Make sure all pids are unique
     All_Pids = lists:append([Pids1, Pids2, Pids3, Pids4, Pids5, Pids6, Pids7]),
@@ -158,7 +161,7 @@ check_edge_pid_allocs(_Config) ->
     Pids9 = ?TM:get_pids(Fount, 2),
     {3,2} = {length(Pids8), length(Pids9)},
     true = sets:is_disjoint(sets:from_list(Pids8), sets:from_list(Pids9)),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
 
     Case4 = "Verify allocation in > slab counts",
     ct:comment(Case4), ct:log(Case4),
@@ -167,7 +170,7 @@ check_edge_pid_allocs(_Config) ->
     {13,7} = {length(Pids10), length(Pids11)},
     true = sets:is_disjoint(sets:from_list(Pids10), sets:from_list(Pids11)),
     ct:log("State: ~p", [?TM:get_status(Fount)]),
-    full = verify_reservoir_is_full(Fount),
+    'FULL' = verify_reservoir_is_full(Fount),
 
     Test_Complete = "Fount pid allocation verified",
     ct:comment(Test_Complete), ct:log(Test_Complete),
@@ -180,8 +183,41 @@ check_edge_pid_allocs(_Config) ->
 -spec check_no_failures(config()) -> ok.
 check_no_failures(_Config) ->
     ct:comment("Check that repeated fount requests don't cause failure"),
-    Hello_Behaviour = cxy_fount_hello_behaviour,
-    
+    Test_Allocators = 
+        ?FORALL({Slab_Size, Depth, Num_Pids},
+                {range(1,10), range(2,5), non_empty(list(range(1,10)))},
+                begin
+                    ct:log(io_lib:format("PropEr testing slab_size ~p, depth ~p",
+                                         [Slab_Size, Depth])),
+                    ct:log(io_lib:format("Testing ~w get_pid fetches", [Num_Pids])),
+                    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
+                    [validate_get_pids(Fount, N, Depth*Slab_Size) || N <- Num_Pids],
+                    true
+                end),
+    true = proper:quickcheck(Test_Allocators, ?PQ_NUM(50)),
+        
     Test_Complete = "No failures detected",
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
+
+validate_get_pids(Fount, Num_Pids, Max_Available) ->
+    erlang:yield(),
+    Pids = ?TM:get_pids(Fount, Num_Pids),
+    case Max_Available >= Num_Pids of
+        false -> [] = Pids,
+                 verify_reservoir_is_full(Fount);
+        true  -> case length(Pids) of
+                     0 -> ran_out;
+                     Num_Pids -> allocated
+                 end,
+
+                 %% make sure workers are unlinked, then kill them.
+                 [begin
+                      {links, Links} = process_info(Pid, links),
+                      false = lists:member(Pid, Links)
+%% ,                      exit(Pid, kill)
+                  end || Pid <- Pids],
+
+                 %% check that the reservoir is 'FULL' again
+                 'FULL' = verify_reservoir_is_full(Fount)
+    end.

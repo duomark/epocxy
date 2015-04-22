@@ -372,15 +372,17 @@ get_pids (Num_Pids, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num
 
     %% Append the slabs and the excess into a single list...
     {{Pids, Remaining_Fount}, {Slabs_Requested, Remaining_Slabs}, {New_Fount_Count, New_Num_Slabs}}
-        = case FC >= Excess of
-              true  -> {lists:split(Excess, Fount),               lists:split(Slabs_Needed, All_Slabs),  {FC - Excess,             Num_Slabs - Slabs_Needed}};
-              false -> {lists:split(Excess, First_Slab ++ Fount), lists:split(Slabs_Needed, More_Slabs), {FC + Slab_Size - Excess, Num_Slabs - Slabs_Needed - 1}}
+        = case FC of
+              Excess ->
+                  replace_slabs(Mod, 1, Slab_Size),
+                  {lists:split(Excess, Fount),               lists:split(Slabs_Needed, All_Slabs),  {FC - Excess,             Num_Slabs - Slabs_Needed}};
+              Enough when Enough > Excess ->
+                  {lists:split(Excess, Fount),               lists:split(Slabs_Needed, All_Slabs),  {FC - Excess,             Num_Slabs - Slabs_Needed}};
+              Not_Enough ->
+                  replace_slabs(Mod, 1, Slab_Size),
+                  {lists:split(Excess, First_Slab ++ Fount), lists:split(Slabs_Needed, More_Slabs), {FC + Slab_Size - Excess, Num_Slabs - Slabs_Needed - 1}}
           end,
     Pids_Requested = lists:append([Pids | Slabs_Requested]),
-
-    %% We might need one more slab replacement...
-    New_Fount_Count =/= 0
-        orelse replace_slabs(Mod, 1, Slab_Size),
     {reply, Pids_Requested, 'LOW', State#cf_state{fount=Remaining_Fount, fount_count=New_Fount_Count, reservoir=Remaining_Slabs, num_slabs=New_Num_Slabs}};
 
 %% All the pids wanted, change to the EMPTY state.
