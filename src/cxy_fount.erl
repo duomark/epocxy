@@ -190,7 +190,7 @@ init({Fount_Behaviour, Slab_Size, Reservoir_Depth}) ->
 %%% If the gen_fsm goes down, any in progress allocators should also.
 spawn_allocators(             0, _Slab_Args) -> done;
 spawn_allocators(Num_Allocators,  Slab_Args) ->
-    erlang:spawn_opt(?MODULE, allocate_slab, Slab_Args, [link]),
+    _ = erlang:spawn_opt(?MODULE, allocate_slab, Slab_Args, [link]),
     spawn_allocators(Num_Allocators-1, Slab_Args).
     
 %%% Rely on the client behaviour to create new pids. This means using
@@ -220,10 +220,12 @@ allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
 %%% Asynch state functions (triggered by gen_fsm:send_event/2)
 %%%------------------------------------------------------------------------------
 
--spec 'EMPTY' (any(), cf_state()) -> {next_state, 'EMPTY',  cf_state()}.
--spec 'LOW'   (any(), cf_state()) -> {next_state, 'LOW',    cf_state()}.
--spec 'FULL'  (any(), cf_state()) -> {next_state, 'FULL',   cf_state()}
-                                   | {stop,       overfull, cf_state()}.
+-type slab() :: {slab, [pid()]}.
+
+-spec 'EMPTY' (slab(), cf_state()) -> {next_state, 'EMPTY'       , cf_state()}.
+-spec 'LOW'   (slab(), cf_state()) -> {next_state, 'FULL' | 'LOW', cf_state()}.
+-spec 'FULL'  (slab(), cf_state()) -> {next_state, 'FULL'        , cf_state()}
+                                          | {stop,       overfull, cf_state()}.
 
 %%% When empty or low, add newly allocated slab of pids...
 'EMPTY' ({slab,  Pids}, #cf_state{} = State) -> add_slab(State, Pids);
@@ -258,29 +260,29 @@ add_slab(#cf_state{fount=Fount, reservoir=Slabs, depth=Depth, num_slabs=Num_Slab
     
 
 %%%------------------------------------------------------------------------------
-%%% Synchronous state functions (trigger gen_fsm:sync_send_event/2,3)
+%%% Synchronous state functions (triggered by gen_fsm:sync_send_event/2,3)
 %%%------------------------------------------------------------------------------
 
--type synch_request() :: {task_pid, any()} | {get_pids, pos_integer()}.
+-type synch_request() :: {task_pids, [any()]} | {get_pids, pos_integer()}.
 
--spec 'EMPTY' (synch_request(), {pid(), reference()}, cf_state()) -> {reply,      [],         'EMPTY', cf_state()}.
--spec 'FULL'  (synch_request(), {pid(), reference()}, cf_state()) -> {reply, [pid()], 'LOW' | 'EMPTY', cf_state()}.
--spec 'LOW'   (synch_request(), {pid(), reference()}, cf_state()) -> {reply, [pid()], 'LOW' | 'EMPTY', cf_state()}.
+-spec 'EMPTY' (synch_request(), {pid(), reference()}, cf_state()) -> {reply,      [], 'EMPTY'                 , cf_state()}.
+-spec 'FULL'  (synch_request(), {pid(), reference()}, cf_state()) -> {reply, [pid()], 'EMPTY' | 'LOW' | 'FULL', cf_state()}.
+-spec 'LOW'   (synch_request(), {pid(), reference()}, cf_state()) -> {reply, [pid()], 'EMPTY' | 'LOW'         , cf_state()}.
 
 %%% 'EMPTY' state is only exited when a slab of pids is delivered...
-'EMPTY' ({task_pids, _Msg}, _From, #cf_state{} = State) -> {reply,      [], 'EMPTY', State};
-'EMPTY' ({get_pids,  _Num}, _From, #cf_state{} = State) -> {reply,      [], 'EMPTY', State};
-'EMPTY' (_Event,            _From, #cf_state{} = State) -> {reply, ignored, 'EMPTY', State}.
+'EMPTY' ({task_pids, _Msgs}, _From, #cf_state{} = State) -> {reply,      [], 'EMPTY', State};
+'EMPTY' ({get_pids,  _Num},  _From, #cf_state{} = State) -> {reply,      [], 'EMPTY', State};
+'EMPTY' (_Event,             _From, #cf_state{} = State) -> {reply, ignored, 'EMPTY', State}.
 
 %%% 'FULL' state is exited when the fount becomes empty and one more pid is needed...
-'FULL'  ({task_pids, Msgs}, _From, #cf_state{} = State) -> task_pids (Msgs, 'FULL', State);
-'FULL'  ({get_pids,  Num},  _From, #cf_state{} = State) -> get_pids  (Num,  'FULL', State);
-'FULL'  (_Event,            _From, #cf_state{} = State) -> {reply, ignored, 'FULL', State}.
+'FULL'  ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs, 'FULL',  State);
+'FULL'  ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,  'FULL',  State);
+'FULL'  (_Event,             _From, #cf_state{} = State) -> {reply, ignored, 'FULL',  State}.
 
 %%% 'LOW' state is exited when there are no reserve slabs or reserve is full.
-'LOW'   ({task_pids, Msgs}, _From, #cf_state{} = State) -> task_pids (Msgs, 'LOW', State);
-'LOW'   ({get_pids,  Num},  _From, #cf_state{} = State) -> get_pids  (Num,  'LOW', State);
-'LOW'   (_Event,            _From, #cf_state{} = State) -> {reply, ignored, 'LOW', State}.
+'LOW'   ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs, 'LOW',   State);
+'LOW'   ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,  'LOW',   State);
+'LOW'   (_Event,             _From, #cf_state{} = State) -> {reply, ignored, 'LOW',   State}.
 
 
 %%%------------------------------------------------------------------------------
@@ -289,7 +291,7 @@ add_slab(#cf_state{fount=Fount, reservoir=Slabs, depth=Depth, num_slabs=Num_Slab
 
 %%% Get as many workers as there are messages to send, then give a message
 %%% to each one without traversing the worker or message list more than once.
-task_pids(Msgs, #cf_state{behaviour=Module} = State, State_Fn)
+task_pids(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
   when is_list(Msgs) ->
     Num_Pids = length(Msgs),
     Reply = {reply, Workers, _New_State_Fn, _New_State} = get_pids(Num_Pids, State_Fn, State),
@@ -314,8 +316,8 @@ get_pids (1, _State_Fn, #cf_state{fount=[], num_slabs=Num_Slabs, slab_size=Slab_
     [[Pid | Rest] = _Slab | More_Slabs] = State#cf_state.reservoir,
     reply([Pid], 'LOW', State#cf_state{fount=Rest, reservoir=More_Slabs, fount_count=Slab_Size-1, num_slabs=Num_Slabs-1});
 
-%% More than 1 pid wanted, can be supplied by Fount...
-%% (Fount might be greater than slab_size, so this clause comes before slab checks)
+%%% More than 1 pid wanted, can be supplied by Fount...
+%%% (Fount might be greater than slab_size, so this clause comes before slab checks)
 get_pids (Num_Pids, _State_Fn, #cf_state{fount=Fount, fount_count=FC} = State)
   when Num_Pids =:= FC ->
     replace_slab_then_return_fount(Fount, State);
@@ -326,14 +328,14 @@ get_pids (Num_Pids,  State_Fn, #cf_state{fount_count=FC} = State)
     {Pids, Remaining} = lists:split(Num_Pids, State#cf_state.fount),
     reply(Pids, State_Fn, State#cf_state{fount=Remaining, fount_count=Fount_Count});
 
-%% More than 1 pid wanted, matches Slab_Size, grab the top of the reservoir if it's not empty...
+%%% More than 1 pid wanted, matches Slab_Size, grab the top of the reservoir if it's not empty...
 get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= Slab_Size, Num_Slabs > 0 ->
     #cf_state{behaviour=Mod, reservoir=[Slab | More_Slabs]} = State,
     replace_slabs(Mod, 1, Slab_Size),
     reply(Slab, 'LOW', State#cf_state{reservoir=More_Slabs, num_slabs=Num_Slabs-1});
 
-%% More than 1 pid wanted, less than Slab_Size, grab the front of top slab, add balance to fount...
+%%% More than 1 pid wanted, less than Slab_Size, grab the front of top slab, add balance to fount...
 get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids < Slab_Size, Num_Slabs > 0 ->
     #cf_state{behaviour=Mod, fount=Fount, fount_count=FC, reservoir=[Slab | More_Slabs]} = State,
@@ -349,12 +351,12 @@ get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slab
                 end,
     reply(Pids, 'LOW', State#cf_state{fount=New_Fount, fount_count=Fount_Count, reservoir=More_Slabs, num_slabs=Num_Slabs-1});
 
-%% More than 1 Pid wanted, but not enough available...
+%%% More than 1 Pid wanted, but not enough available...
 get_pids (Num_Pids,  State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids > (Num_Slabs * Slab_Size) + FC ->
     {reply, [], State_Fn, State};
 
-%% More than 1 pid wanted, more than Slab_Size, see if there are enough to return...
+%%% More than 1 pid wanted, more than Slab_Size, see if there are enough to return...
 get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids > Slab_Size, Num_Pids < (Num_Slabs * Slab_Size) + FC -> 
     Excess       = Num_Pids rem Slab_Size,
@@ -378,7 +380,7 @@ get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, nu
     New_State_Fn = case Remaining_Fount =:= [] andalso Remaining_Slabs =:= [] of true -> 'EMPTY'; false -> 'LOW' end,
     reply(Pids_Requested, New_State_Fn, State#cf_state{fount=Remaining_Fount, fount_count=New_Fount_Count, reservoir=Remaining_Slabs, num_slabs=New_Num_Slabs});
 
-%% All the pids wanted, change to the EMPTY state.
+%%% All the pids wanted, change to the EMPTY state.
 get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= (Num_Slabs * Slab_Size) + FC ->
     #cf_state{behaviour=Mod, fount=Fount, reservoir=Reservoir} = State, 
@@ -386,9 +388,9 @@ get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, nu
     reply(lists:append([Fount | Reservoir]), 'EMPTY', State#cf_state{fount=[], reservoir=[], fount_count=0, num_slabs=0}).
 
 
-%% Unlink the reply pids so they can no longer take down the cxy_fount.
+%%% Unlink the reply pids so they can no longer take down the cxy_fount.
 reply(Pids, New_State_Fn, New_State_Record) ->
-    [unlink(Pid) || Pid <- Pids],
+    _ = [unlink(Pid) || Pid <- Pids],
     {reply, Pids, New_State_Fn, New_State_Record}.
 
 replace_slabs(Mod, Num_Slabs, Slab_Size) ->
@@ -469,5 +471,4 @@ handle_event (_Event,   State_Name,  State) -> {next_state, State_Name, State}.
 handle_info  (_Info,    State_Name,  State) -> {next_state, State_Name, State}.
 code_change  (_OldVsn,  State_Name,  State, _Extra) -> {ok, State_Name, State}.
 
-terminate    (_Reason, _State_Name, _State) -> ok. % All pids should be linked and die when FSM dies.
-
+terminate    (_Reason, _State_Name, _State) -> ok. % Pre-spawned pids should be linked and die when FSM dies.

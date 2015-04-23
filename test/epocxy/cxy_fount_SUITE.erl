@@ -185,7 +185,7 @@ check_no_failures(_Config) ->
     ct:comment("Check that repeated fount requests don't cause failure"),
     Test_Allocators = 
         ?FORALL({Slab_Size, Depth, Num_Pids},
-                {range(1,10), range(2,5), non_empty(list(range(1,10)))},
+                {range(1,50), range(2,20), non_empty(list(range(1,100)))},
                 begin
                     ct:log(io_lib:format("PropEr testing slab_size ~p, depth ~p",
                                          [Slab_Size, Depth])),
