@@ -36,6 +36,8 @@
          %% reinit/1,     reinit/2,        % Reset configuration
          get_pid/1,    get_pids/2,      % Get 1 pid or list of pids
          task_pid/2,   task_pids/2,     % Send message to pid
+         get_spawn_rate_per_slab/1,     % Report the spawn allocator slab rate
+         get_spawn_rate_per_process/1,  % Report the spawn allocator process rate
          get_status/1                   % Get status of Fount
         ]).
 
@@ -44,21 +46,24 @@
          handle_info/3, terminate/3, code_change/4]).
 
 %%% Internally spawned functions.
--export([allocate_slab/4]).
+-export([allocate_slab/5]).
 
 %%% state functions
 -export(['EMPTY'/2, 'FULL'/2, 'LOW'/2]).
 -export(['EMPTY'/3, 'FULL'/3, 'LOW'/3]).
 
+-type microseconds() :: non_neg_integer().
+-type timed_slab()   :: {[pid()], microseconds()}.
+
 -record(cf_state,
         {
-          behaviour        :: module(),
-          fount       = [] :: [pid()],
-          reservoir   = [] :: [[pid()]],
-          fount_count = 0  :: non_neg_integer(),   % Num pids in fount
-          num_slabs   = 0  :: non_neg_integer(),   % Num slabs in reservoir
-          depth       = 0  :: non_neg_integer(),   % Desired reservoir slabs + 1 for fount
-          slab_size        :: pos_integer()        % Num pids in a single slab
+          behaviour            :: module(),
+          fount       = {[],0} :: timed_slab(),        % One slab + elapsed to allocate
+          reservoir   = []     :: [timed_slab()],      % Stack of Depth-1 slabs + elapsed each
+          fount_count = 0      :: non_neg_integer(),   % Num pids in fount
+          num_slabs   = 0      :: non_neg_integer(),   % Num slabs in reservoir
+          depth       = 0      :: non_neg_integer(),   % Desired reservoir slabs + 1 for fount
+          slab_size            :: pos_integer()        % Num pids in a single slab
         }).
 -type cf_state() :: #cf_state{}.
 
@@ -155,6 +160,16 @@ task_pids(Fount, Msgs)
                      | {slab_size,     non_neg_integer()}   % Size of a full slab
                      | {max_slabs,     non_neg_integer()}.  % Max number of slabs including fount
 
+-spec get_spawn_rate_per_slab    (fount_ref()) -> [microseconds()].
+-spec get_spawn_rate_per_process (fount_ref()) -> [microseconds()].
+
+get_spawn_rate_per_slab(Fount) -> 
+    gen_fsm:sync_send_all_state_event(Fount, {get_spawn_rate_per_slab}).
+
+get_spawn_rate_per_process(Fount) -> 
+    gen_fsm:sync_send_all_state_event(Fount, {get_spawn_rate_per_process}).
+    
+
 -spec get_status (fount_ref()) -> [status_attr(), ...].
 
 get_status(Fount) ->
@@ -175,7 +190,7 @@ get_status(Fount) ->
 init({Fount_Behaviour, Slab_Size, Reservoir_Depth}) ->
 
     %% Spawn a new allocator for each slab desired...
-    Slab_Allocator_Args = [self(), Fount_Behaviour, Slab_Size, []],
+    Slab_Allocator_Args = [self(), Fount_Behaviour, os:timestamp(), Slab_Size, []],
     done = spawn_allocators(Reservoir_Depth, Slab_Allocator_Args),
 
     %% Finish initializing, any newly allocated slabs will appear as events.
@@ -192,7 +207,7 @@ spawn_allocators(             0, _Slab_Args) -> done;
 spawn_allocators(Num_Allocators,  Slab_Args) ->
     _ = erlang:spawn_opt(?MODULE, allocate_slab, Slab_Args, [link]),
     spawn_allocators(Num_Allocators-1, Slab_Args).
-    
+
 %%% Rely on the client behaviour to create new pids. This means using
 %%% spawn or any of the gen_*:start patterns since the pids are unsupervised.
 %%% The resulting pids must be linked to the cxy_fount parent so that they are
@@ -200,10 +215,12 @@ spawn_allocators(Num_Allocators,  Slab_Args) ->
 %%% should avoid crashing because they can take out the entire cxy_fount.
 %%% Once a pid receives a task_pid command, it becomes unlinked and free to
 %%% complete its task on its own timeline independently from the fount.
-allocate_slab(Parent_Pid, _Module, 0, Slab) ->
-    gen_fsm:send_event(Parent_Pid, {slab, Slab});
+allocate_slab(Parent_Pid, _Module, Start_Time, 0, Slab) ->
+    Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
+    %% error_logger:error_msg("Elapsed: ~p (~p)", [Elapsed_Time, length(Slab)]),
+    gen_fsm:send_event(Parent_Pid, {slab, Slab, Elapsed_Time});
 
-allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
+allocate_slab(Parent_Pid,  Module, Start_Time, Num_To_Spawn, Slab)
  when is_pid(Parent_Pid),       is_atom(Module),
       is_integer(Num_To_Spawn), Num_To_Spawn > 0 ->
 
@@ -212,7 +229,7 @@ allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
     %% rather than the gen_fsm of the cxy_fount parent_pid process space.
     case Module:start_pid(Parent_Pid) of
         Allocated_Pid when is_pid(Allocated_Pid) ->
-            allocate_slab(Parent_Pid, Module, Num_To_Spawn-1, [Allocated_Pid | Slab])
+            allocate_slab(Parent_Pid, Module, Start_Time, Num_To_Spawn-1, [Allocated_Pid | Slab])
     end.
 
 
@@ -220,7 +237,7 @@ allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
 %%% Asynch state functions (triggered by gen_fsm:send_event/2)
 %%%------------------------------------------------------------------------------
 
--type slab() :: {slab, [pid()]}.
+-type slab() :: {slab, [pid()], microseconds()}.
 
 -spec 'EMPTY' (slab(), cf_state()) -> {next_state, 'EMPTY'       , cf_state()}.
 -spec 'LOW'   (slab(), cf_state()) -> {next_state, 'FULL' | 'LOW', cf_state()}.
@@ -228,34 +245,37 @@ allocate_slab(Parent_Pid, Module, Num_To_Spawn, Slab)
                                           | {stop,       overfull, cf_state()}.
 
 %%% When empty or low, add newly allocated slab of pids...
-'EMPTY' ({slab,  Pids}, #cf_state{} = State) -> add_slab(State, Pids);
-'EMPTY' (_Event,        #cf_state{} = State) -> {next_state, 'EMPTY',  State}.
+'EMPTY' ({slab,  Pids,  Elapsed}, #cf_state{} = State) -> add_slab(State, Pids, Elapsed);
+'EMPTY' (_Event,                  #cf_state{} = State) -> {next_state, 'EMPTY',  State}.
 
-'LOW'   ({slab,  Pids}, #cf_state{} = State) -> add_slab(State, Pids);
-'LOW'   (_Event,        #cf_state{} = State) -> {next_state, 'LOW',    State}.
+'LOW'   ({slab,  Pids,  Elapsed}, #cf_state{} = State) -> add_slab(State, Pids, Elapsed);
+'LOW'   (_Event,                  #cf_state{} = State) -> {next_state, 'LOW',    State}.
 
 %%% When full, we shouldn't receive a request to add more.
-'FULL'  ({slab, _Pids}, #cf_state{} = State) -> {stop,       overfull, State};
-'FULL'  (_Event,        #cf_state{} = State) -> {next_state, 'FULL',   State}.
+'FULL'  ({slab, _Pids, _Elapsed}, #cf_state{} = State) -> {stop,       overfull, State};
+'FULL'  (_Event,                  #cf_state{} = State) -> {next_state, 'FULL',   State}.
 
 
 %%% Slabs are added to the fount first if reservoir is full...
-add_slab(#cf_state{fount=[], depth=Depth, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
-         [_Pid | _More] = Pids) when is_pid(_Pid), Depth =:= Num_Slabs + 1 ->
+add_slab(#cf_state{fount={[], 0}, depth=Depth, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
+         [_Pid | _More] = Pids, Elapsed)
+  when is_pid(_Pid), Depth =:= Num_Slabs + 1, is_integer(Elapsed), Elapsed > 0 ->
 
     %% Goal depth is reservoir depth + 1 for the fount (which just arrived)
-    {next_state, 'FULL', State#cf_state{fount=Pids, fount_count=Slab_Size}};
+    {next_state, 'FULL', State#cf_state{fount={Pids, Elapsed}, fount_count=Slab_Size}};
 
 %%% Then to the reservoir of untapped slabs.
-add_slab(#cf_state{fount=Fount, reservoir=Slabs, depth=Depth, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
-         [_Pid | _More] = Pids) when is_pid(_Pid) ->
+add_slab(#cf_state{fount={Fount, _Time}, reservoir=Slabs, depth=Depth, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
+         [_Pid | _More] = Pids, Elapsed)
+  when is_pid(_Pid), is_integer(Elapsed), Elapsed > 0 ->
 
     %% Goal depth includes the fount (even if partial) and the new_slab being received
     %% Crash if the stack of slabs ever exceeds the goal depth.
+    Timed_Slab = {Pids, Elapsed},
     case {Fount, Depth > Num_Slabs + 2} of
-        {[],     _} -> {next_state, 'LOW',  State#cf_state{fount=Pids, fount_count=Slab_Size}};
-        { _,  true} -> {next_state, 'LOW',  State#cf_state{reservoir=[Pids | Slabs], num_slabs=Num_Slabs+1}};
-        { _, false} -> {next_state, 'FULL', State#cf_state{reservoir=[Pids | Slabs], num_slabs=Num_Slabs+1}}
+        {[],     _} -> {next_state, 'LOW',  State#cf_state{fount=Timed_Slab, fount_count=Slab_Size}};
+        { _,  true} -> {next_state, 'LOW',  State#cf_state{reservoir=[Timed_Slab | Slabs], num_slabs=Num_Slabs+1}};
+        { _, false} -> {next_state, 'FULL', State#cf_state{reservoir=[Timed_Slab | Slabs], num_slabs=Num_Slabs+1}}
     end.
     
 
@@ -310,44 +330,45 @@ task_pids(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
 get_pids (0,  State_Fn, #cf_state{} = State) -> {reply, [], State_Fn, State};
  
 %% 1 Pid wanted...
-get_pids (1, _State_Fn, #cf_state{fount=[Pid]                       } = State) -> replace_slab_then_return_fount([Pid], State);
-get_pids (1,  State_Fn, #cf_state{fount=[Pid | More], fount_count=FC} = State) -> reply([Pid], State_Fn, State#cf_state{fount=More, fount_count=FC-1});
-get_pids (1, _State_Fn, #cf_state{fount=[], num_slabs=Num_Slabs, slab_size=Slab_Size} = State) ->
-    [[Pid | Rest] = _Slab | More_Slabs] = State#cf_state.reservoir,
-    reply([Pid], 'LOW', State#cf_state{fount=Rest, reservoir=More_Slabs, fount_count=Slab_Size-1, num_slabs=Num_Slabs-1});
+get_pids (1, _State_Fn, #cf_state{fount={[Pid]       , _Time}                } = State) -> replace_slab_then_return_fount([Pid], State);
+get_pids (1,  State_Fn, #cf_state{fount={[Pid | More],  Time}, fount_count=FC} = State) -> reply([Pid], State_Fn, State#cf_state{fount={More, Time}, fount_count=FC-1});
+get_pids (1, _State_Fn, #cf_state{fount={[],           _Time}, num_slabs=Num_Slabs, slab_size=Slab_Size} = State) ->
+    [{[Pid | Rest], Slab_Time} = _Slab | More_Slabs] = State#cf_state.reservoir,
+    reply([Pid], 'LOW', State#cf_state{fount={Rest, Slab_Time}, reservoir=More_Slabs, fount_count=Slab_Size-1, num_slabs=Num_Slabs-1});
 
 %%% More than 1 pid wanted, can be supplied by Fount...
 %%% (Fount might be greater than slab_size, so this clause comes before slab checks)
-get_pids (Num_Pids, _State_Fn, #cf_state{fount=Fount, fount_count=FC} = State)
+get_pids (Num_Pids, _State_Fn, #cf_state{fount={Fount, _Time}, fount_count=FC} = State)
   when Num_Pids =:= FC ->
     replace_slab_then_return_fount(Fount, State);
 
-get_pids (Num_Pids,  State_Fn, #cf_state{fount_count=FC} = State)
+get_pids (Num_Pids,  State_Fn, #cf_state{fount={Fount, Time}, fount_count=FC} = State)
   when Num_Pids < FC ->
     Fount_Count = FC - Num_Pids,
-    {Pids, Remaining} = lists:split(Num_Pids, State#cf_state.fount),
-    reply(Pids, State_Fn, State#cf_state{fount=Remaining, fount_count=Fount_Count});
+    {Pids, Remaining} = lists:split(Num_Pids, Fount),
+    reply(Pids, State_Fn, State#cf_state{fount={Remaining, Time}, fount_count=Fount_Count});
 
 %%% More than 1 pid wanted, matches Slab_Size, grab the top of the reservoir if it's not empty...
 get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= Slab_Size, Num_Slabs > 0 ->
-    #cf_state{behaviour=Mod, reservoir=[Slab | More_Slabs]} = State,
+    #cf_state{behaviour=Mod, reservoir=[{Slab, _Time} | More_Slabs]} = State,
     replace_slabs(Mod, 1, Slab_Size),
     reply(Slab, 'LOW', State#cf_state{reservoir=More_Slabs, num_slabs=Num_Slabs-1});
 
 %%% More than 1 pid wanted, less than Slab_Size, grab the front of top slab, add balance to fount...
 get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids < Slab_Size, Num_Slabs > 0 ->
-    #cf_state{behaviour=Mod, fount=Fount, fount_count=FC, reservoir=[Slab | More_Slabs]} = State,
+    #cf_state{behaviour=Mod, fount={Fount, _Time1}, fount_count=FC, reservoir=[{Slab, Time2} | More_Slabs]} = State,
     replace_slabs(Mod, 1, Slab_Size),
     {Pids, Remaining} = lists:split(Num_Pids, Slab),
     Partial_Slab_Size = Slab_Size - Num_Pids,
     Fount_Count = FC + Partial_Slab_Size,
 
     %% Try to be efficient about reconstructing Fount (may end up larger than a slab)...
+    %% The timing will be off, because we reflect the time to spawn Remaining.
     New_Fount = case Partial_Slab_Size > FC of
-                    true  -> Fount ++ Remaining;
-                    false -> Remaining ++ Fount
+                    true  -> {Fount ++ Remaining, Time2};
+                    false -> {Remaining ++ Fount, Time2}
                 end,
     reply(Pids, 'LOW', State#cf_state{fount=New_Fount, fount_count=Fount_Count, reservoir=More_Slabs, num_slabs=Num_Slabs-1});
 
@@ -361,31 +382,33 @@ get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, nu
   when Num_Pids > Slab_Size, Num_Pids < (Num_Slabs * Slab_Size) + FC -> 
     Excess       = Num_Pids rem Slab_Size,
     Slabs_Needed = (Num_Pids - Excess) div Slab_Size,
-    #cf_state{behaviour=Mod, fount=Fount, reservoir=[First_Slab | More_Slabs] = All_Slabs} = State,
+    #cf_state{behaviour=Mod, fount={Fount, Time1}, reservoir=[{First_Slab, Time2} | More_Slabs] = All_Slabs} = State,
     replace_slabs(Mod, Slabs_Needed, Slab_Size),
 
     %% Append the slabs and the excess into a single list...
-    {{Pids, Remaining_Fount}, {Slabs_Requested, Remaining_Slabs}, {New_Fount_Count, New_Num_Slabs}}
+    Full_Slabs_Left = Num_Slabs - Slabs_Needed,
+    {{Pids, Remaining_Fount}, Fount_Time, {Slabs_Requested, Remaining_Slabs}, {New_Num_Slabs, New_Fount_Count}}
         = case FC of
               Excess ->
                   replace_slabs(Mod, 1, Slab_Size),
-                  {lists:split(Excess, Fount),               lists:split(Slabs_Needed, All_Slabs),  {FC - Excess,             Num_Slabs - Slabs_Needed}};
+                  {{Fount, []}, 0, lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, 0}};
               Enough when Enough > Excess ->
-                  {lists:split(Excess, Fount),               lists:split(Slabs_Needed, All_Slabs),  {FC - Excess,             Num_Slabs - Slabs_Needed}};
+                  {lists:split(Excess, Fount), Time1, lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, FC-Excess}};
               _Not_Enough ->
                   replace_slabs(Mod, 1, Slab_Size),
-                  {lists:split(Excess, First_Slab ++ Fount), lists:split(Slabs_Needed, More_Slabs), {FC + Slab_Size - Excess, Num_Slabs - Slabs_Needed - 1}}
+                  {lists:split(Excess, Fount ++ First_Slab), Time2, lists:split(Slabs_Needed, More_Slabs), {Full_Slabs_Left-1, FC+Slab_Size-Excess}}
           end,
-    Pids_Requested = lists:append([Pids | Slabs_Requested]),
+    Pids_Requested = lists:append([Pids | [S || {S, _Time} <- Slabs_Requested]]),
     New_State_Fn = case Remaining_Fount =:= [] andalso Remaining_Slabs =:= [] of true -> 'EMPTY'; false -> 'LOW' end,
-    reply(Pids_Requested, New_State_Fn, State#cf_state{fount=Remaining_Fount, fount_count=New_Fount_Count, reservoir=Remaining_Slabs, num_slabs=New_Num_Slabs});
+    New_State = State#cf_state{fount={Remaining_Fount, Fount_Time}, fount_count=New_Fount_Count, reservoir=Remaining_Slabs, num_slabs=New_Num_Slabs},
+    reply(Pids_Requested, New_State_Fn, New_State);
 
 %%% All the pids wanted, change to the EMPTY state.
 get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= (Num_Slabs * Slab_Size) + FC ->
-    #cf_state{behaviour=Mod, fount=Fount, reservoir=Reservoir} = State, 
+    #cf_state{behaviour=Mod, fount={Fount, _Fount_Time}, reservoir=Reservoir} = State, 
     replace_slabs(Mod, Num_Slabs + 1, Slab_Size),
-    reply(lists:append([Fount | Reservoir]), 'EMPTY', State#cf_state{fount=[], reservoir=[], fount_count=0, num_slabs=0}).
+    reply(lists:append([Fount | [S || {S, _Time} <- Reservoir]]), 'EMPTY', State#cf_state{fount={[], 0}, reservoir=[], fount_count=0, num_slabs=0}).
 
 
 %%% Unlink the reply pids so they can no longer take down the cxy_fount.
@@ -394,7 +417,7 @@ reply(Pids, New_State_Fn, New_State_Record) ->
     {reply, Pids, New_State_Fn, New_State_Record}.
 
 replace_slabs(Mod, Num_Slabs, Slab_Size) ->
-    Slab_Allocator_Args = [self(), Mod, Slab_Size, []],
+    Slab_Allocator_Args = [self(), Mod, os:timestamp(), Slab_Size, []],
     done = spawn_allocators(Num_Slabs, Slab_Allocator_Args).
 
 send_msg(Pid, Module, Msg) ->
@@ -404,7 +427,7 @@ send_msg(Pid, Module, Msg) ->
 
 replace_slab_then_return_fount(Pids, #cf_state{behaviour=Mod, slab_size=Slab_Size, num_slabs=Num_Slabs} = State) ->
     replace_slabs(Mod, 1, Slab_Size),
-    New_State = State#cf_state{fount=[], fount_count=0},
+    New_State = State#cf_state{fount={[], 0}, fount_count=0},
     case Num_Slabs of
         0 -> reply(Pids, 'EMPTY', New_State);
         _ -> reply(Pids, 'LOW',   New_State)
@@ -415,8 +438,30 @@ replace_slab_then_return_fount(Pids, #cf_state{behaviour=Mod, slab_size=Slab_Siz
 %%% Synchronous state functions (trigger gen_fsm:sync_send_all_state_event/2)
 %%%------------------------------------------------------------------------------
 
-handle_sync_event ({get_status}, _From, State_Name, State) ->
+handle_sync_event ({get_spawn_rate_per_slab}, _From, State_Name, State) ->
+    #cf_state{fount={Fount, Fount_Time}, reservoir=Slabs, num_slabs=Num_Slabs} = State,
+    Slab_Times = [Slab_Time || {_Slab, Slab_Time} <- Slabs],
+    {Times, Slab_Count}
+        = case Fount of
+              [] -> {Slab_Times,                Num_Slabs};
+              _  -> {[Fount_Time | Slab_Times], Num_Slabs+1}
+          end,
+    Rate = (lists:sum(Times) * 100 div Slab_Count) / 100,
+    {reply, Rate, State_Name, State};
 
+handle_sync_event ({get_spawn_rate_per_process}, _From, State_Name, State) ->
+    #cf_state{fount={Fount, Fount_Time}, reservoir=Slabs,
+              fount_count=FC, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
+    Slab_Times = [Slab_Time || {_Slab, Slab_Time} <- Slabs],
+    {Times, Slab_Count}
+        = case Fount of
+              [] -> {Slab_Times,                Num_Slabs};
+              _  -> {[Fount_Time | Slab_Times], Num_Slabs+1}
+          end,
+    Rate = (lists:sum(Times) * 100 div (FC + (Slab_Count*Slab_Size))) / 100,
+    {reply, Rate, State_Name, State};
+
+handle_sync_event ({get_status}, _From, State_Name, State) ->
     #cf_state{depth=Depth, fount_count=FC, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
     Max_Pid_Count     = Depth * Slab_Size,
     Current_Pid_Count = FC + (Num_Slabs * Slab_Size),
@@ -435,16 +480,16 @@ handle_sync_event ({get_status}, _From, State_Name, State) ->
     {reply, Status, State_Name, State};
 
 %% handle_sync_event ({reinit, New_Fount_Behaviour, New_Slab_Size, New_Reservoir_Depth}, _From, State_Name,
-%%                    #cf_state{behaviour=New_Fount_Behaviour, fount=Fount, reservoir=Slabs, fount_count=FC, slab_size=Old_Slab_Size} = State) ->
+%%                    #cf_state{behaviour=New_Fount_Behaviour, fount={Fount, Time}, reservoir=Slabs, fount_count=FC, slab_size=Old_Slab_Size} = State) ->
 %%     {Slab_Count_To_Allocate, New_Fount_Count, New_Fount}
 %%         = kill_idle_slabs(Old_Slab_Size, Slabs, FC, Fount, New_Reservoir_Depth),
 
 %%     %% Spawn a new allocator for each slab desired...
-%%     Slab_Allocator_Args = [self(), New_Fount_Behaviour, New_Slab_Size, []],
+%%     Slab_Allocator_Args = [self(), New_Fount_Behaviour, os:timestamp(), New_Slab_Size, []],
 %%     done = spawn_allocators(Slab_Count_To_Allocate, Slab_Allocator_Args),
 %%     New_State = #cf_state{
 %%                    behaviour   = New_Fount_Behaviour,
-%%                    fount       = New_Fount,
+%%                    fount       = {New_Fount, New_Time},
 %%                    fount_count = New_Fount_Count,
 %%                    reservoir   = [],
 %%                    slab_size   = New_Slab_Size

@@ -13,7 +13,11 @@
 -module(cxy_fount_hello_behaviour).
 -behaviour(cxy_fount).
 
+%% Behaviour API
 -export([start_pid/1, send_msg/2]).
+
+%% For testing only
+-export([say_to/2]).
 
 -spec start_pid (cxy_fount:fount_ref()) ->   pid()  | {error, Reason::any()}.
 -spec send_msg  (Worker, tuple())       -> [Worker] | {error, Reason::any()} | []
@@ -33,6 +37,7 @@ say_to(Worker, Msg) ->
     Ref = make_ref(),
     Now1 = now(),
     Worker ! {Ref, self(), Msg},
+    %% now() is used to guarantee monotonic increasing time
     receive {Ref, goodbye, Now2} -> true = Now1 < Now2
     after 1000 -> throw(say_hello_timeout)
     end.

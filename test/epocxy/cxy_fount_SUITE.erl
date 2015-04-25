@@ -104,20 +104,23 @@ start_fount(Behaviour, Slab_Size, Depth) ->
     Fount.
 
 verify_reservoir_is_full(Fount) ->
-    Final_State = case lists:foldl(fun full_fn/2, {'INIT', 0}, lists:duplicate(10, Fount)) of
-                      {'FULL',  _Num_Times} = State -> State;
-                      {_Other,  _Num_Times} = State -> ct:log("Failed state: ~p",
-                                                              [sys:get_state(Fount)]),
-                                                       State
-                  end,
-    ct:log("Loops to detect a full reservoir: ~p~n", [Final_State]),
-    element(1, Final_State).
-
-full_fn(_Pid, { 'FULL', Count}) -> {'FULL', Count};
-full_fn( Pid, {_Status, Count}) ->
-    erlang:yield(),
-    Status = ?TM:get_status(Pid),
-    {proplists:get_value(current_state, Status), Count+1}.
+    {Final_State, _Loops}
+        = lists:foldl(fun (_Pid, {'FULL', N}) -> {'FULL', N};
+                          ( Pid, {_,  Count}) ->
+                              erlang:yield(),
+                              Status = ?TM:get_status(Pid),
+                              {proplists:get_value(current_state, Status), Count+1}
+                      end, {'INIT', 0}, lists:duplicate(50, Fount)),
+    ct:log("Looped ~p times before reservoir was ~p", [_Loops, Final_State]),
+    Props = ?TM:get_status(Fount),
+    [FC, Num_Slabs, Max_Slabs, Slab_Size, Pid_Count, Max_Pids]
+        = [proplists:get_value(P, Props)
+           || P <- [fount_count, slab_count, max_slabs, slab_size, pid_count, max_pids]],
+    Ok_Full_Count = (Max_Pids - Pid_Count) < Slab_Size,
+    Ok_Slab_Count = (Max_Slabs - 1) =:= Num_Slabs andalso FC > 0,
+    {true, true, FC, Num_Slabs, Slab_Size, Max_Pids, Final_State, _Loops}
+        = {Ok_Full_Count, Ok_Slab_Count, FC, Num_Slabs, Slab_Size, Max_Pids, Final_State, _Loops},
+    Final_State.
 
 
 %%%===================================================================
@@ -169,7 +172,6 @@ check_edge_pid_allocs(_Config) ->
     Pids11 = ?TM:get_pids(Fount, 7),
     {13,7} = {length(Pids10), length(Pids11)},
     true = sets:is_disjoint(sets:from_list(Pids10), sets:from_list(Pids11)),
-    ct:log("State: ~p", [?TM:get_status(Fount)]),
     'FULL' = verify_reservoir_is_full(Fount),
 
     Test_Complete = "Fount pid allocation verified",
@@ -194,7 +196,7 @@ check_no_failures(_Config) ->
                     [validate_get_pids(Fount, N, Depth*Slab_Size) || N <- Num_Pids],
                     true
                 end),
-    true = proper:quickcheck(Test_Allocators, ?PQ_NUM(50)),
+    true = proper:quickcheck(Test_Allocators, ?PQ_NUM(100)),
         
     Test_Complete = "No failures detected",
     ct:comment(Test_Complete), ct:log(Test_Complete),
@@ -214,7 +216,10 @@ validate_get_pids(Fount, Num_Pids, Max_Available) ->
                  %% make sure workers are unlinked, then kill them.
                  [begin
                       {links, Links} = process_info(Pid, links),
-                      false = lists:member(Pid, Links)
+                      false = lists:member(Pid, Links),
+                      cxy_fount_hello_behaviour:say_to(Pid, hello)
+                      %% Killing crashes the test, but normal end above doesn't???
+                      %% exit(Pid, kill)
                   end || Pid <- Pids],
 
                  %% check that the reservoir is 'FULL' again
