@@ -19,11 +19,9 @@
 %% For testing only
 -export([say_to/2]).
 
--spec start_pid (cxy_fount:fount_ref()) ->   pid()  | {error, Reason::any()}.
--spec send_msg  (Worker, tuple())       -> [Worker] | {error, Reason::any()} | []
-                                               when Worker :: pid().
+-include("cxy_fount.hrl").
 
-start_pid (Fount)       -> spawn      (fun() -> link(Fount), wait_for_hello() end).
+?START_FOUNT_PID(Fount, wait_for_hello).
 send_msg  (Worker, Msg) -> spawn_link (fun() -> say_to(Worker, Msg) end).
 
 %% Idle workers may wait a while before being used in a test.
