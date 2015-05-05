@@ -109,7 +109,26 @@ receive_sum(High_Water) ->
 %%% batch_feeder behaviour implementation
 %%%===================================================================
 
-%%% batch_feeder behaviour implementation.
+%%% This behaviour implementation uses {?MODULE, proplists:proplist()}
+%%% to define the context of batch generation. The initial set of
+%%% integers is a list contained on the 'all_ids' property. A 2nd
+%%% property 'batch_size' determines how many integers to slice off
+%%% for each batch. In this implementation, the batch_size never
+%%% varies.
+
+%%% prep_batch pairs {Batch_Num, Id} and adds a sum of Ids seen
+%%% to the proplist context pushing it on the front to shadow
+%%% older sums (but leaving them there for debugging inspection
+%%% if necessary for the test suite).
+
+%%% exec_batch wraps {processed, Batch_Num, Elem} where Elem is
+%%% the pair from prep_batch. It takes a timestamp and puts that
+%%% on the context and messages the sum to a collector.
+
+%%% This is only a demonstration to show how side-effects can
+%%% be maintained in the context, and concurrency or messaging
+%%% can be embedded into the iteration phases.
+
 first_batch({_Module, Env} = Context) ->
     Num_Items     = proplists:get_value(batch_size, Env),
     All_Ids       = proplists:get_value(all_ids,    Env),
