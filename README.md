@@ -46,3 +46,9 @@ Most distributed systems consult information that is slow to generate or obtain.
 The ets_cache provided here is a generational cache with two generations. New objects are inserted in the newest generation. When a generation change occurs, a new empty generation is created and the oldest generation is deleted. The previously active generation becomes the old generation. The pattern of access is: new generation -> old generation -> external data source. When an item is found in the old generation, it is copied to the new generation so that it will survive the next generation change. Everything residing solely in the old generation will be automatically eliminated in the single action of deleting that generation when it has aged.
 
 Generation cycling can be performed based on elapsed time, number of access, an arbitrary function, or, when the entire dataset can comfortably fit in memory, never.
+
+
+Batch Feeder
+------------
+
+Batch feeder is used for the lazy generation of large sets, context-aware iteration over sets, or paced iteration. It provides a behaviour framework for implementing a control structure that you may control via the generation of a continuation function at each step of the iteration. It may be combined with concurrency constructs to chop a large structure into segments which can be processed as batches in the background.

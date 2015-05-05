@@ -6,9 +6,10 @@
 {application, epocxy,
  [
   {id, "epocxy"},
-  {vsn, "0.9.8e"},
+  {vsn, "0.9.9"},
   {description, "Erlang Patterns of Concurrency"},
   {modules,      [
+                  batch_feeder,
                   ets_buffer,
                   cxy_ctl,
                   cxy_cache, cxy_cache_fsm, cxy_cache_sup
