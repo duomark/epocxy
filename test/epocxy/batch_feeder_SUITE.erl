@@ -64,18 +64,18 @@ check_processing(_Config) ->
     Test_Start = "Check that continuation-based processing visits each step",
     ct:comment(Test_Start), ct:log(Test_Start),
     Test_Fn
-        = ?FORALL({Num_Ids, Batch_Size}, {range(10,100), range(1,10)},
+        = ?FORALL({Num_Ids, Batch_Size}, {range(5,10), range(1,5)},
                   begin
                       Ids   =  {all_ids, lists:seq(1, Num_Ids)},
                       Props = [{sum, 0}, {batch_size, Batch_Size}, {collector, self()}, Ids],
                       ct:log("Testing with context ~p", [Props]),
 
                       done  = ?TM:process_data({?MODULE, Props}),
-                      %% ct:log("Message queue:~n~p~n", [process_info(self(), messages)]),
+                      ct:log("Message queue:~n~p~n", [process_info(self(), messages)]),
                       Iters = round((Num_Ids / Batch_Size) + 0.49),
                       receive_processed(Iters, Batch_Size, Batch_Size, 1, Num_Ids)
                   end),
-    true = proper:quickcheck(Test_Fn, ?PQ_NUM(5)),
+    true = proper:quickcheck(Test_Fn, ?PQ_NUM(50)),
 
     Test_Complete = "Continuation functions worked",
     ct:comment(Test_Complete), ct:log(Test_Complete),
@@ -89,7 +89,8 @@ receive_processed(Iters,    Num_Msgs,  Curr_Msg,  Pos, Max_Pos) ->
             {processed, Iteration, {Iteration, Pos}} = Msg,
             New_Pos = Pos + 1,
             case {Curr_Msg - 1, New_Pos =< Max_Pos} of
-                {0,     _} -> Pos > 1 andalso New_Pos < Max_Pos andalso receive_sum(Pos),
+                {0,     _} -> (Pos > 1 orelse Num_Msgs =:= 1)
+                                  andalso Iters > 1 andalso receive_sum(Pos),
                               receive_processed(Iters-1, Num_Msgs, Num_Msgs, New_Pos, Max_Pos);
                 {_, false} -> receive_processed(Iters-1, Num_Msgs, Num_Msgs, New_Pos, Max_Pos);
                 {N,  true} -> receive_processed(Iters,   Num_Msgs,        N, New_Pos, Max_Pos)
