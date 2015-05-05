@@ -2,6 +2,7 @@
 {level, details}.
 {incl_dirs, ["src/"]}.
 {incl_mods, [
+             batch_feeder,
              ets_buffer,
              cxy_ctl,
              cxy_cache
