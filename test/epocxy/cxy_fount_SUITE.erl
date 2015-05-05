@@ -23,7 +23,8 @@
 
 %%% Test case exports
 -export([
-         check_construction/1, check_edge_pid_allocs/1, check_no_failures/1
+         check_construction/1, check_edge_pid_allocs/1, check_reservoir_refills/1,
+         check_faulty_behaviour/1
         ]).
 
 -include("epocxy_common_test.hrl").
@@ -39,12 +40,15 @@
 -spec all() -> [test_case() | {group, test_group()}].
 all() -> [
           {group, check_create}   % Verify construction and reservoir refill.
+          %% {group, check_behaviour} % Ensure behaviour crashes properly.
          ].
 
 -spec groups() -> [{test_group(), [sequence], [test_case() | {group, test_group()}]}].
 groups() -> [
              {check_create,  [sequence],
-              [check_construction, check_edge_pid_allocs, check_no_failures]}
+              [check_construction, check_edge_pid_allocs, check_reservoir_refills]}
+             %% {check_behaviour, [sequence],
+             %%  [check_faulty_behaviour]}
             ].
 
 
@@ -180,20 +184,23 @@ check_edge_pid_allocs(_Config) ->
         
 
 %%%===================================================================
-%%% check_no_failures/1
+%%% check_reservoir_refills/1
 %%%===================================================================
--spec check_no_failures(config()) -> ok.
-check_no_failures(_Config) ->
-    ct:comment("Check that repeated fount requests don't cause failure"),
+-spec check_reservoir_refills(config()) -> ok.
+check_reservoir_refills(_Config) ->
+    ct:comment("Check that repeated fount requests are quickly replaced"),
     Test_Allocators = 
         ?FORALL({Slab_Size, Depth, Num_Pids},
-                {range(1,50), range(2,20), non_empty(list(range(1,100)))},
+                {range(1,20), range(2,10), non_empty(list(range(1,30)))},
                 begin
                     ct:log(io_lib:format("PropEr testing slab_size ~p, depth ~p",
                                          [Slab_Size, Depth])),
                     ct:log(io_lib:format("Testing ~w get_pid fetches", [Num_Pids])),
                     Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
-                    [validate_get_pids(Fount, N, Depth*Slab_Size) || N <- Num_Pids],
+                    ct:log(io_lib:format("Testing get",  [])),
+                    [validate_pids(Fount, N, Depth*Slab_Size,  get) || N <- Num_Pids],
+                    ct:log(io_lib:format("Testing task", [])),
+                    [validate_pids(Fount, N, Depth*Slab_Size, task) || N <- Num_Pids],
                     true
                 end),
     true = proper:quickcheck(Test_Allocators, ?PQ_NUM(100)),
@@ -202,9 +209,12 @@ check_no_failures(_Config) ->
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
-validate_get_pids(Fount, Num_Pids, Max_Available) ->
+validate_pids(Fount, Num_Pids, Max_Available, Task_Or_Get) ->
     erlang:yield(),
-    Pids = ?TM:get_pids(Fount, Num_Pids),
+    Pids = case Task_Or_Get of
+               get  -> ?TM:get_pids(Fount, Num_Pids);
+               task -> ?TM:task_pids(Fount, lists:duplicate(Num_Pids, hello))
+           end,
     case Max_Available >= Num_Pids of
         false -> [] = Pids,
                  verify_reservoir_is_full(Fount);
@@ -215,13 +225,52 @@ validate_get_pids(Fount, Num_Pids, Max_Available) ->
 
                  %% make sure workers are unlinked, then kill them.
                  [begin
-                      {links, Links} = process_info(Pid, links),
-                      false = lists:member(Pid, Links),
-                      cxy_fount_hello_behaviour:say_to(Pid, hello)
-                      %% Killing crashes the test, but normal end above doesn't???
-                      %% exit(Pid, kill)
+                      case process_info(Pid, links) of
+                          undefined      -> skip;
+                          {links, Links} ->
+                              false = lists:member(Pid, Links),
+                              Task_Or_Get =:= task
+                                  orelse cxy_fount_hello_behaviour:say_to(Pid, hello)
+                              %% Killing crashes the test, but normal end above doesn't???
+                              %% exit(Pid, kill)
+                      end
                   end || Pid <- Pids],
 
                  %% check that the reservoir is 'FULL' again
                  'FULL' = verify_reservoir_is_full(Fount)
+    end.
+
+
+%%%===================================================================
+%%% check_faulty_behaviour/1
+%%%===================================================================
+-spec check_faulty_behaviour(config()) -> ok.
+check_faulty_behaviour(_Config) ->
+    Test = "Check that non-pid returns crash the fount",
+    ct:comment(Test), ct:log(Test),
+
+    Case1 = "Verify a bad behaviour crashes the fount",
+    ct:comment(Case1), ct:log(Case1),
+    Old_Trap = process_flag(trap_exit, true),
+    try
+        Slab_Size = 10, Num_Slabs = 3,
+        {ok, Fount1} = ?TM:start_link(cxy_fount_fail_behaviour, Slab_Size, Num_Slabs),
+        crashed = bad_pid(Fount1),
+
+        {ok, Fount2} = ?TM:start_link(cxy_fount_fail_behaviour),
+        crashed = bad_pid(Fount2)
+
+    after true = process_flag(trap_exit, Old_Trap)
+    end,
+
+    Test_Complete = "Fount failure verified",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
+    ok.
+
+bad_pid(Fount) ->
+    receive {'EXIT', Fount,
+             {{case_clause, bad_pid},
+              [{cxy_fount, allocate_slab, 5,
+                [{file, "src/cxy_fount.erl"}, {line,_}]}]}} -> crashed
+    after 1000 -> timeout
     end.

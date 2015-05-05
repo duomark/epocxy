@@ -33,7 +33,7 @@
 %%% API
 -export([start_link/1, start_link/2,    % Fount with no name
          start_link/3, start_link/4,    % Fount with name
-         %% reinit/1,     reinit/2,        % Reset configuration
+%%         reinit/1,     reinit/2,        % Reset configuration
          get_pid/1,    get_pids/2,      % Get 1 pid or list of pids
          task_pid/2,   task_pids/2,     % Send message to pid
          get_spawn_rate_per_slab/1,     % Report the spawn allocator slab rate
@@ -120,14 +120,14 @@ start_link(Fount_Name, Fount_Behaviour, Slab_Size, Reservoir_Depth)
 %% -spec reinit(fount_ref(), module(), pos_integer(), pos_integer()) -> ok.
 
 %% reinit(Fount, Fount_Behaviour)
-%%   when is_pid  (Fount), is_atom (Fount_Behaviour);
-%%        is_atom (Fount), is_atom (Fount_Behaviour) ->
+%%   when is_atom (Fount) orelse is_pid (Fount),
+%%        is_atom (Fount_Behaviour) ->
 %%     reinit(Fount, Fount_Behaviour, default_slab_size(), default_num_slabs()).
 %% reinit(Fount, Fount_Behaviour, Slab_Size, Reservoir_Depth)
-%%   when is_pid(Fount) orelse is_atom(Fount),
-%%        is_atom(Fount_Behaviour),
-%%        is_integer(Slab_Size), Slab_Size > 0,
-%%        is_integer(Reservoir_Depth), Reservoir_Depth >= 2 ->
+%%   when is_atom (Fount) orelse is_pid (Fount),
+%%        is_atom (Fount_Behaviour),
+%%        is_integer (Slab_Size), Slab_Size > 0,
+%%        is_integer (Reservoir_Depth), Reservoir_Depth >= 2 ->
 %%     gen_fsm:sync_send_all_event(Fount, {reinit, Fount_Behaviour, Slab_Size, Reservoir_Depth}).
 
 
@@ -221,8 +221,7 @@ allocate_slab(Parent_Pid, _Module, Start_Time, 0, Slab) ->
     gen_fsm:send_event(Parent_Pid, {slab, Slab, Elapsed_Time});
 
 allocate_slab(Parent_Pid,  Module, Start_Time, Num_To_Spawn, Slab)
- when is_pid(Parent_Pid),       is_atom(Module),
-      is_integer(Num_To_Spawn), Num_To_Spawn > 0 ->
+ when is_pid(Parent_Pid), is_atom(Module), is_integer(Num_To_Spawn), Num_To_Spawn > 0 ->
 
     %% Module behaviour needs to explicitly link to the parent_pid,
     %% since this function is executing in the caller's process space,
@@ -313,12 +312,16 @@ add_slab(#cf_state{fount={Fount, _Time}, reservoir=Slabs, depth=Depth, num_slabs
 %%% to each one without traversing the worker or message list more than once.
 task_pids(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
   when is_list(Msgs) ->
+    %% Well, ok, twice for the message list...
     Num_Pids = length(Msgs),
     Reply = {reply, Workers, _New_State_Fn, _New_State} = get_pids(Num_Pids, State_Fn, State),
-    [] = lists:foldl(fun(Worker, [Next_Msg | Remaining_Msgs]) ->
-                             send_msg(Worker, Module, Next_Msg),
-                             Remaining_Msgs
-                     end, Msgs, Workers),
+    [] = case Workers of
+             [] -> [];
+             _  -> lists:foldl(fun(Worker, [Next_Msg | Remaining_Msgs]) ->
+                                       send_msg(Worker, Module, Next_Msg),
+                                       Remaining_Msgs
+                               end, Msgs, Workers)
+         end,
     Reply.
 
 
@@ -481,7 +484,7 @@ handle_sync_event ({get_status}, _From, State_Name, State) ->
 
 %% handle_sync_event ({reinit, New_Fount_Behaviour, New_Slab_Size, New_Reservoir_Depth}, _From, State_Name,
 %%                    #cf_state{behaviour=New_Fount_Behaviour, fount={Fount, Time}, reservoir=Slabs, fount_count=FC, slab_size=Old_Slab_Size} = State) ->
-%%     {Slab_Count_To_Allocate, New_Fount_Count, New_Fount}
+%%     {Slab_Count_To_Allocate, New_Fount_Count, New_Fount, New_Time}
 %%         = kill_idle_slabs(Old_Slab_Size, Slabs, FC, Fount, New_Reservoir_Depth),
 
 %%     %% Spawn a new allocator for each slab desired...
@@ -516,4 +519,5 @@ handle_event (_Event,   State_Name,  State) -> {next_state, State_Name, State}.
 handle_info  (_Info,    State_Name,  State) -> {next_state, State_Name, State}.
 code_change  (_OldVsn,  State_Name,  State, _Extra) -> {ok, State_Name, State}.
 
-terminate    (_Reason, _State_Name, _State) -> ok. % Pre-spawned pids should be linked and die when FSM dies.
+%%% Pre-spawned pids should be linked and die when FSM dies.
+terminate    (_Reason, _State_Name, _State) -> ok.
