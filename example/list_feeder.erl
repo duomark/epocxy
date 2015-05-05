@@ -27,11 +27,9 @@
 -type batch_chunk()    :: batch_feeder:batch_chunk(batch_type()).
 -type batch_continue() :: batch_feeder:batch_continue(batch_type(), context()).
 -type batch_done()     :: batch_done().
-%% -type thunk()          :: batch_feeder:thunk(batch_type(), context()).
 -type thunk_return()   :: batch_feeder:thunk_return(batch_type()).
 
 -spec first_batch(context())               -> thunk_return().
-%% -spec next_batch(thunk())                  -> batch_continue() | batch_done().
 -spec prep_batch(pos_integer(), batch_chunk(), context()) -> batch_continue().
 -spec exec_batch(pos_integer(), batch_chunk(), context()) -> {ok, context()} | {error, any()}.
 
@@ -44,7 +42,7 @@ batch_size_prop() -> batch_size.
 %%% batch_feeder behaviour implementation.
 first_batch({_Module, Env} = Context) ->
     Num_Items     = proplists:get_value(batch_size_prop(), Env),
-    {Batch, Rest} = get_next_batch(Num_Items, all_ids()),
+    {Batch, Rest} = batch_feeder:get_next_batch_list(Num_Items, all_ids()),
     {{Batch, Context}, make_continuation_fn(Rest)}.
 
 prep_batch(Iteration, Batch, Context) ->
@@ -64,7 +62,7 @@ make_continuation_fn([]) ->
 make_continuation_fn(Batch_Remaining) ->
     fun(_Iteration, {_Module, Env} = Context) ->
             Num_Items          = proplists:get_value(batch_size_prop(), Env),
-            {Next_Batch, More} = get_next_batch(Num_Items, Batch_Remaining),
+            {Next_Batch, More} = batch_feeder:get_next_batch_list(Num_Items, Batch_Remaining),
             {{Next_Batch, Context}, make_continuation_fn(More)}
     end.
 

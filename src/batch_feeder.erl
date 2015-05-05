@@ -18,7 +18,7 @@
 -module(batch_feeder).
 -author('Jay Nelson <jay@duomark.com>').
 
--export([process_data/1]).
+-export([process_data/1, get_next_batch_list/2]).
 
 
 %% Source of work is consumed using continuation thunks.
@@ -38,26 +38,31 @@
               thunk/2, thunk_return/2]).
 
 
-%% The first batch is generated from only a contextual configuration. 
-%% It returns a batch plus a thunk for the next batch.
+%%% The first batch is generated from only a contextual configuration. 
+%%% It returns a batch plus a thunk for the next batch.
 -callback first_batch(context(Ctxt1)) ->
     thunk_return(Type, context(Ctxt2))
         when Type::any(), Ctxt1 :: any(), Ctxt2 :: any().
 
-%% %% Future batches return further thunks or 'done'.
-%% -callback next_batch(Iteration, thunk(Type, context(Ctxt1)), context(Ctxt1)) ->
-%%     batch_continue(Type, context(Ctxt2))
-%%         when Iteration :: pos_integer(), Type :: any(), Ctxt1 :: any(), Ctxt2 :: any().
-
-%% Reformat the raw batch in preparation for processing (can be just a noop()).
+%%% Reformat the raw batch in preparation for processing (can be just a noop()).
 -callback prep_batch(iteration(), batch_chunk(Type), context(Ctxt1)) ->
     batch_continue(Type, context(Ctxt2))
         when Type :: any(), Ctxt1 :: any(), Ctxt2 :: any().
 
-%% Perform the downstream task on the batch chunk.
+%%% Perform the downstream task on the batch chunk.
 -callback exec_batch(iteration(), batch_chunk(Type), context(Ctxt1)) ->
     {ok, context(Ctxt2)} | {error, Reason}
         when Type :: any(), Ctxt1 :: any(), Ctxt2 :: any(), Reason :: any().
+
+%%% Helper function with simple list splitting for batches.
+-spec get_next_batch_list(pos_integer(), list()) -> {list(), list()}.
+get_next_batch_list(Num_Items_Per_Batch, Items) ->
+    case length(Items) of
+        N when N =< Num_Items_Per_Batch ->
+            {Items, []};
+        Len ->
+            lists:split(lists:min([Num_Items_Per_Batch, Len]), Items)
+    end.
 
 -spec process_data(context(Ctxt)) -> done | {error, tuple()} when Ctxt :: any().
 process_data({Module, _Env} = Context) ->
@@ -69,7 +74,6 @@ process_data({Module, _Env} = Context) ->
                         error_logger:error_msg("~p:process_data error {~p,~p}~n~99999p", Args),
                         {error, {first_batch, {1, Error, Type}}}
     end.
-
 
 %% todo: report progress, elapsed time.
 process_batch(Iteration, This_Batch, {Module, _Env} = Context, Continuation_Fn) ->
