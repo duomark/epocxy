@@ -21,8 +21,8 @@
          check_atom_limits/1,         check_limit_errors/1,
          check_concurrency_types/1,
          check_execute_task/1,        check_maybe_execute_task/1,
-         check_execute_pid_link/1,    check_maybe_execute_pid_link/1,
-         check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1,
+         check_execute_pid_all_link_types/1,
+         check_maybe_execute_pid_all_link_types/1,
          check_multiple_init_calls/1, check_copying_dict/1
         ]).
 
@@ -39,8 +39,8 @@ all() -> [
           check_atom_limits,         check_limit_errors,
           check_concurrency_types,
           check_execute_task,        check_maybe_execute_task,
-          check_execute_pid_link,    check_maybe_execute_pid_link,
-          check_execute_pid_monitor, check_maybe_execute_pid_monitor,
+          check_execute_pid_all_link_types,
+          check_maybe_execute_pid_all_link_types,
           check_multiple_init_calls, check_copying_dict
          ].
 
@@ -209,9 +209,9 @@ check_maybe_execute_task(_Config) ->
 
     ok.
 
-%% execute_pid_link runs a task with a return value of Pid or {inline, Result}.
--spec check_execute_pid_link(config()) -> ok.
-check_execute_pid_link(_Config) ->
+%% execute_pid_all_link_types runs a task with a return value of Pid or {inline, Result}.
+-spec check_execute_pid_all_link_types(config()) -> ok.
+check_execute_pid_all_link_types(_Config) ->
     {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
     Limits = [{Inline_Type, inline_only, 2, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
@@ -219,10 +219,9 @@ check_execute_pid_link(_Config) ->
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
     _ = try
-        {inline, undefined} = ?TM:execute_pid_link(Inline_Type, erlang, put, [joe, 5]),
-        5 = get(joe),
-        {inline, 5} = ?TM:execute_pid_link(Inline_Type, erlang, put, [joe, 7]),
-        7 = get(joe)
+            ok = check_inline_dict_type(Inline_Type, joe, 5, 7, pid),
+            ok = check_inline_dict_type(Inline_Type, joe, 6, 8, link),
+            ok = check_inline_dict_type(Inline_Type, joe, 7, 9, monitor)
     after put(joe, Old_Joe)
     end,
 
@@ -230,25 +229,89 @@ check_execute_pid_link(_Config) ->
     Self = self(),
     Old_Joe = erase(joe),
     _ = try
-        undefined = get(joe),
-        New_Pid = ?TM:execute_pid_link(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
-        false = (New_Pid =:= Self),
-        {links, [Self]} = process_info(New_Pid, links),
-        {monitors,  []} = process_info(New_Pid, monitors),
-        false = (New_Pid =:= self()),
-        New_Pid ! {Self, get_pdict, joe},
-        undefined = get(joe),
-        ok = receive {get_pdict, New_Pid, 5} -> ok
-             after 100 -> timeout
-             end
+            ok = check_pid_dict_type(Self, joe, 5, Spawn_Type, pid,     false),
+            ok = check_pid_dict_type(Self, joe, 6, Spawn_Type, link,    false),
+            ok = check_pid_dict_type(Self, joe, 7, Spawn_Type, monitor, false)
     after put(joe, Old_Joe)
     end,
 
     ok.
 
-%% maybe_execute_pid_link runs a task with a return value of Pid or {max_pids, Max}.
--spec check_maybe_execute_pid_link(config()) -> ok.
-check_maybe_execute_pid_link(_Config) ->
+check_inline_dict_type(Inline_Type, Key, Value1, Value2, Link_Type) ->
+    Exec_Fun = case Link_Type of
+                   pid     -> execute_pid;
+                   link    -> execute_pid_link;
+                   monitor -> execute_pid_monitor
+               end,
+    {inline, undefined} = ?TM:Exec_Fun(Inline_Type, erlang, put, [Key, Value1]),
+    Value1 = get(Key),
+    {inline,    Value1} = ?TM:Exec_Fun(Inline_Type, erlang, put, [Key, Value2]),
+    Value2 = get(Key),
+    erase(Key),
+    ok.
+    
+check_pid_dict_type(Self, Key, Value, Spawn_Type, Link_Type, Maybe) ->
+    undefined = get(Key),   % These executions only affect pdict of newly spawned pids.
+    Exec_Fun = case {Link_Type, Maybe} of
+                   {pid,     false} -> execute_pid;
+                   {link,    false} -> execute_pid_link;
+                   {monitor, false} -> execute_pid_monitor;
+
+                   {pid,      true} -> maybe_execute_pid;
+                   {link,     true} -> maybe_execute_pid_link;
+                   {monitor,  true} -> maybe_execute_pid_monitor
+               end,
+    New_Pid = case Link_Type =:= monitor of
+                  true  -> {Pid, _Ref} = ?TM:Exec_Fun(Spawn_Type, ?MODULE, put_pdict, [Key, Value]), Pid;
+                  false -> ?TM:Exec_Fun(Spawn_Type, ?MODULE, put_pdict, [Key, Value])
+              end,
+    ok = check_pid_dict       (New_Pid, Self, Link_Type),
+    ok = check_pid_dict_value (New_Pid, Self, Key, Value).
+
+check_pid_dict(New_Pid, Self, pid) ->
+    false = (New_Pid =:= Self),
+    {links,        []} = process_info(New_Pid, links),
+    {monitored_by, []} = process_info(New_Pid, monitored_by),
+    ok;
+check_pid_dict(New_Pid, Self, link) ->
+    false = (New_Pid =:= Self),
+    {links,    [Self]} = process_info(New_Pid, links),
+    {monitored_by, []} = process_info(New_Pid, monitored_by),
+    ok;
+check_pid_dict(New_Pid, Self, monitor) ->
+    false = (New_Pid =:= Self),
+    {links,            []} = process_info(New_Pid, links),
+    {monitored_by, [Self]} = process_info(New_Pid, monitored_by),
+    ok.
+
+check_pid_dict_value(New_Pid, Self, Key, Value) ->
+    New_Pid ! {Self, get_pdict, Key},
+    undefined = get(Key),
+    ok = receive {get_pdict, New_Pid, Value} -> ok
+         after 100 -> timeout
+         end.
+
+check_overmax_no_exec(Overmax_Type, Key, Value, Link_Type) ->
+    Exec_Fun = case Link_Type of
+                   pid     -> maybe_execute_pid;
+                   link    -> maybe_execute_pid_link;
+                   monitor -> maybe_execute_pid_monitor
+               end,
+    {max_pids, 0} = ?TM:Exec_Fun(Overmax_Type, erlang, put, [Key, Value]),
+    erlang:yield(),
+    undefined = get(joe),
+    ok.
+
+check_overmax(Overmax_Type) ->
+    [0] = [proplists:get_value(active_procs, Props)
+           || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
+              Type =:= Overmax_Type],
+    ok.
+
+
+%% maybe_execute_pid_all_link_types runs a task with a return value of Pid or {max_pids, Max}.
+-spec check_maybe_execute_pid_all_link_types(config()) -> ok.
+check_maybe_execute_pid_all_link_types(_Config) ->
     {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
     Limits = [{Overmax_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
     true = ?TM:init(Limits),
@@ -256,15 +319,18 @@ check_maybe_execute_pid_link(_Config) ->
     %% When inline, update our process dictionary...
     Old_Joe = erase(joe),
     _ = try
-        {max_pids, 0} = ?TM:maybe_execute_pid_link(Overmax_Type, erlang, put, [joe, 5]),
-        erlang:yield(),
-        undefined = get(joe),
-        {max_pids, 0} = ?TM:maybe_execute_pid_link(Overmax_Type, erlang, put, [joe, 7]),
-        erlang:yield(),
-        undefined = get(joe),
-        [0] = [proplists:get_value(active_procs, Props)
-               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
-                  Type =:= Overmax_Type]
+
+            ok = check_overmax_no_exec(Overmax_Type, joe, 5, pid),
+            ok = check_overmax_no_exec(Overmax_Type, joe, 7, pid),
+            ok = check_overmax(Overmax_Type),
+
+            ok = check_overmax_no_exec(Overmax_Type, joe, 5, link),
+            ok = check_overmax_no_exec(Overmax_Type, joe, 7, link),
+            ok = check_overmax(Overmax_Type),
+
+            ok = check_overmax_no_exec(Overmax_Type, joe, 5, monitor),
+            ok = check_overmax_no_exec(Overmax_Type, joe, 7, monitor),
+            ok = check_overmax(Overmax_Type)
 
     after put(joe, Old_Joe)
     end,
@@ -273,99 +339,15 @@ check_maybe_execute_pid_link(_Config) ->
     Self = self(),
     Old_Joe = erase(joe),
     _ = try
-        undefined = get(joe),
-        New_Pid = ?TM:maybe_execute_pid_link(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
-        false = (New_Pid =:= Self),
-        {links, [Self]} = process_info(New_Pid, links),
-        {monitors,  []} = process_info(New_Pid, monitors),
-        New_Pid ! {Self, get_pdict, joe},
-        undefined = get(joe),
-        ok = receive {get_pdict, New_Pid, 5} -> ok
-             after 100 -> timeout
-             end,
-        [0] = [proplists:get_value(active_procs, Props)
-               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
-                  Type =:= Overmax_Type]
 
-    after put(joe, Old_Joe)
-    end,
+        ok = check_pid_dict_type(Self, joe, 5, Spawn_Type, pid,     true),
+        ok = check_overmax(Spawn_Type),
 
-    ok.
+        ok = check_pid_dict_type(Self, joe, 6, Spawn_Type, link,    true),
+        ok = check_overmax(Spawn_Type),
 
-%% execute_pid_monitor runs a task with a return value of {Pid, Monitor_Ref} or {inline, Result}.
--spec check_execute_pid_monitor(config()) -> ok.
-check_execute_pid_monitor(_Config) ->
-    {Inline_Type, Spawn_Type} = {pdict_inline, pdict_spawn},
-    Limits = [{Inline_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
-    true = ?TM:init(Limits),
-    
-    %% When inline, update our process dictionary...
-    Old_Joe = erase(joe),
-    _ = try
-        {inline, undefined} = ?TM:execute_pid_monitor(Inline_Type, erlang, put, [joe, 5]),
-        5 = get(joe),
-        {inline, 5} = ?TM:execute_pid_monitor(Inline_Type, erlang, put, [joe, 7]),
-        7 = get(joe)
-    after put(joe, Old_Joe)
-    end,
-
-    %% When spawned, it affects a new process dictionary, not ours.
-    Self = self(),
-    Old_Joe = erase(joe),
-    _ = try
-        undefined = get(joe),
-        {New_Pid, _Monitor_Ref} = ?TM:execute_pid_monitor(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
-        false = (New_Pid =:= self()),
-        {links,        []} = process_info(New_Pid, links),
-        New_Pid ! {Self, get_pdict, joe},
-        undefined = get(joe),
-        ok = receive {get_pdict, New_Pid, 5} -> ok
-             after 100 -> timeout
-             end
-    after put(joe, Old_Joe)
-    end,
-
-    ok.
-
-%% maybe_execute_pid_monitor runs a task with a return value of {Pid, Monitor_Ref} or {max_pids, Max}.
--spec check_maybe_execute_pid_monitor(config()) -> ok.
-check_maybe_execute_pid_monitor(_Config) ->
-    {Overmax_Type, Spawn_Type} = {pdict_overmax, pdict_spawn},
-    Limits = [{Overmax_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 3, 5, ?MAX_SLOW_FACTOR}],
-    true = ?TM:init(Limits),
-    
-    %% When inline, update our process dictionary...
-    Old_Joe = erase(joe),
-    _ = try
-        {max_pids, 0} = ?TM:maybe_execute_pid_monitor(Overmax_Type, erlang, put, [joe, 5]),
-        erlang:yield(),
-        undefined = get(joe),
-        {max_pids, 0} = ?TM:maybe_execute_pid_monitor(Overmax_Type, erlang, put, [joe, 7]),
-        erlang:yield(),
-        undefined = get(joe),
-        [0] = [proplists:get_value(active_procs, Props)
-               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
-                  Type =:= Overmax_Type]
-
-    after put(joe, Old_Joe)
-    end,
-
-    %% When spawned, it affects a new process dictionary, not ours.
-    Self = self(),
-    Old_Joe = erase(joe),
-    _ = try
-        undefined = get(joe),
-        {New_Pid, _Monitor_Ref} = ?TM:maybe_execute_pid_monitor(Spawn_Type, ?MODULE, put_pdict, [joe, 5]),
-        false = (New_Pid =:= Self),
-        {links,        []} = process_info(New_Pid, links),
-        New_Pid ! {Self, get_pdict, joe},
-        undefined = get(joe),
-        ok = receive {get_pdict, New_Pid, 5} -> ok
-             after 100 -> timeout
-             end,
-        [0] = [proplists:get_value(active_procs, Props)
-               || [{task_type, Type} | _] = Props <- cxy_ctl:concurrency_types(),
-                  Type =:= Overmax_Type]
+        ok = check_pid_dict_type(Self, joe, 7, Spawn_Type, monitor, true),
+        ok = check_overmax(Spawn_Type)
 
     after put(joe, Old_Joe)
     end,
