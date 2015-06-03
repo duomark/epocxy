@@ -19,8 +19,10 @@
          add_task_types/1, remove_task_types/1, adjust_task_limits/1,
          execute_task/4, maybe_execute_task/4,
          execute_task/5, maybe_execute_task/5,
+         execute_pid/4, execute_pid/5,
          execute_pid_link/4, execute_pid_monitor/4, 
          execute_pid_link/5, execute_pid_monitor/5, 
+         maybe_execute_pid/4, maybe_execute_pid/5,
          maybe_execute_pid_link/4, maybe_execute_pid_monitor/4, 
          maybe_execute_pid_link/5, maybe_execute_pid_monitor/5,
          concurrency_types/0, history/1, history/3,
@@ -414,6 +416,23 @@ internal_execute_task(Task_Type, Mod, Fun, Args, Over_Limit_Action, Dict_Props) 
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
 %%   does not have too many currently executing processes. If there are too
+%%   many, execute the task inline. Returns an unlinked, unmonitored pid
+%%   if spawned, or results if inlined. Useful when remote monitoring of
+%%   the newly spawned pid is necessary.
+%% @end
+
+-spec execute_pid(atom(), atom(), atom(), list())                          -> pid() | {inline, any()}.
+-spec execute_pid(atom(), atom(), atom(), list(), all_keys | dict_props()) -> pid() | {inline, any()}.
+
+execute_pid(Task_Type, Mod, Fun, Args) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, pid, inline, none).
+
+execute_pid(Task_Type, Mod, Fun, Args, Dict_Props) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, pid, inline, Dict_Props).
+
+%% @doc
+%%   Execute a task by spawning a function to run it, only if the task type
+%%   does not have too many currently executing processes. If there are too
 %%   many, execute the task inline. Returns a linked pid if spawned, or results
 %%   if inlined.
 %% @end
@@ -426,22 +445,6 @@ execute_pid_link(Task_Type, Mod, Fun, Args) ->
 
 execute_pid_link(Task_Type, Mod, Fun, Args, Dict_Props) ->
     internal_execute_pid(Task_Type, Mod, Fun, Args, link, inline, Dict_Props).
-
-%% @doc
-%%   Execute a task by spawning a function to run it, only if the task type
-%%   does not have too many currently executing processes. If there are too
-%%   many, return {max_pids, Max_Count} instead of linked pid.
-%% @end
-
--spec maybe_execute_pid_link(atom(), atom(), atom(), list()) -> pid() | {max_pids, non_neg_integer()}.
--spec maybe_execute_pid_link(atom(), atom(), atom(), list(),
-                             all_keys | dict_props()) -> pid() | {max_pids, non_neg_integer()}.
-
-maybe_execute_pid_link(Task_Type, Mod, Fun, Args) ->
-    internal_execute_pid(Task_Type, Mod, Fun, Args, link, refuse, none).
-
-maybe_execute_pid_link(Task_Type, Mod, Fun, Args, Dict_Props) ->
-    internal_execute_pid(Task_Type, Mod, Fun, Args, link, refuse, Dict_Props).
 
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
@@ -459,6 +462,39 @@ execute_pid_monitor(Task_Type, Mod, Fun, Args) ->
 
 execute_pid_monitor(Task_Type, Mod, Fun, Args, Dict_Props) ->
     internal_execute_pid(Task_Type, Mod, Fun, Args, monitor, inline, Dict_Props).
+
+%% @doc
+%%   Execute a task by spawning a function to run it, only if the task type
+%%   does not have too many currently executing processes. If there are too
+%%   many, return {max_pids, Max_Count} instead of an unlinked, unmonitored
+%%   pid. Useful when remote monitoring of the newly spawned pid is necessary.
+%% @end
+
+-spec maybe_execute_pid(atom(), atom(), atom(), list()) -> pid() | {max_pids, non_neg_integer()}.
+-spec maybe_execute_pid(atom(), atom(), atom(), list(),
+                        all_keys | dict_props()) -> pid() | {max_pids, non_neg_integer()}.
+
+maybe_execute_pid(Task_Type, Mod, Fun, Args) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, pid, refuse, none).
+
+maybe_execute_pid(Task_Type, Mod, Fun, Args, Dict_Props) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, pid, refuse, Dict_Props).
+
+%% @doc
+%%   Execute a task by spawning a function to run it, only if the task type
+%%   does not have too many currently executing processes. If there are too
+%%   many, return {max_pids, Max_Count} instead of linked pid.
+%% @end
+
+-spec maybe_execute_pid_link(atom(), atom(), atom(), list()) -> pid() | {max_pids, non_neg_integer()}.
+-spec maybe_execute_pid_link(atom(), atom(), atom(), list(),
+                             all_keys | dict_props()) -> pid() | {max_pids, non_neg_integer()}.
+
+maybe_execute_pid_link(Task_Type, Mod, Fun, Args) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, link, refuse, none).
+
+maybe_execute_pid_link(Task_Type, Mod, Fun, Args, Dict_Props) ->
+    internal_execute_pid(Task_Type, Mod, Fun, Args, link, refuse, Dict_Props).
 
 %% @doc
 %%   Execute a task by spawning a function to run it, only if the task type
@@ -487,6 +523,7 @@ internal_execute_pid(Task_Type, Mod, Fun, Args, Spawn_Type, Over_Limit_Action, D
             Dict_Prop_Vals = get_calling_dictionary_values(Dict_Props),
             Wrapper_Args = [Mod, Fun, Args, Task_Type, Max_History, Start, spawn, Dict_Prop_Vals],
             case Spawn_Type of
+                pid     -> spawn        (?MODULE, execute_wrapper, Wrapper_Args);
                 link    -> spawn_link   (?MODULE, execute_wrapper, Wrapper_Args);
                 monitor -> spawn_monitor(?MODULE, execute_wrapper, Wrapper_Args)
             end;
