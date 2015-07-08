@@ -71,11 +71,15 @@ create_ets_table(Name, Concurrency_Type)
     Options = [named_table | make_options(Concurrency_Type)],
     gen_fsm:sync_send_event(?SERVER, {create_ets_table, Name, Options}).
 
-delete_ets_table(Table_Id_Or_Name) ->
+delete_ets_table(Table_Id_Or_Name)
+  when is_integer (Table_Id_Or_Name);
+       is_atom    (Table_Id_Or_Name) ->
     true = gen_fsm:sync_send_event(?SERVER, {delete_ets_table, Table_Id_Or_Name}),
     ok.
 
-change_owner(Table_Id_Or_Name, New_Owner) ->
+change_owner(Table_Id_Or_Name, New_Owner)
+  when is_integer (Table_Id_Or_Name), is_pid (New_Owner);
+       is_atom    (Table_Id_Or_Name), is_pid (New_Owner) ->
     true = gen_fsm:sync_send_event(?SERVER, {change_owner, Table_Id_Or_Name, New_Owner}),
     ok.
 
