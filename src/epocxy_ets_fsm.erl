@@ -18,7 +18,7 @@
 %%%   tables is for maximum concurrency, so they must be accessible
 %%%   by all processes.
 %%%
-%%% @since v0.9.8d
+%%% @since v0.9.9a
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(epocxy_ets_fsm).

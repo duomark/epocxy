@@ -9,7 +9,7 @@
 %%%   tables that are needed by the concurrency library. This FSM is
 %%%   intended to outlive any patterns which are built on ets tables.
 %%%
-%%% @since v0.9.8d
+%%% @since v0.9.9a
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(epocxy_sup).

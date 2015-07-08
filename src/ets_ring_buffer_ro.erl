@@ -22,7 +22,7 @@
 %%%   set true. As with other buffer data types driven by metadata, the
 %%%   metadata ets table is mainly accessed by writing and has only
 %%%   write_concurrency set true.
-%%% @since 0.9.8d
+%%% @since 0.9.9a
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(ets_ring_buffer_ro).
