@@ -178,12 +178,12 @@ create(Cache_Name)
     Now          = os:timestamp(),
     New_Metadata = [{#cxy_cache_meta.old_gen_time, Now},
                     {#cxy_cache_meta.new_gen_time, Now},
-                    {#cxy_cache_meta.old_gen, new_cache_gen()},     % Create oldest first
-                    {#cxy_cache_meta.new_gen, new_cache_gen()}],
+                    {#cxy_cache_meta.old_gen, new_cache_gen(Cache_Name)},     % Create oldest first
+                    {#cxy_cache_meta.new_gen, new_cache_gen(Cache_Name)}],
     ?DO_METADATA(ets:update_element(?MODULE, Cache_Name, New_Metadata)).
 
 %% Cache generations are unnamed tables, use version tagged values and can be modified by any process.
-new_cache_gen() -> ets:new(cache, [set, public, {keypos, #cxy_cache_value.key}]).
+new_cache_gen(Cache_Name) -> ets:new(Cache_Name, [set, public, {keypos, #cxy_cache_value.key}]).
 
 %% Comparators available to Gen_Fun closure which provides its own threshold value.
 new_gen_count_threshold(_Name,  Fetch_Count, _Time, Thresh) -> Fetch_Count > Thresh.
@@ -641,7 +641,7 @@ make_generation_finish( Cache_Name,  Metadata, true ) ->
 
 %% Create a new generation cache and update the metadata to reflect its existence.
 new_generation(Cache_Name, New_Gen_Id, New_Time, Old_Gen_Id) ->
-    Empty_Gen_Id = new_cache_gen(),
+    Empty_Gen_Id = new_cache_gen(Cache_Name),
     New_Metadata = [
                     %% Reset the fetch count so it can be used for generation measurement...
                     {#cxy_cache_meta.fetch_count,  0},
