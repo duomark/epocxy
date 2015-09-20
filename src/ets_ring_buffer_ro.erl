@@ -70,7 +70,7 @@
           anti_swap_lock = 0 :: non_neg_integer()   | '_',
           swapping_lock  = 0 :: non_neg_integer()   | '_',
           ring_size      = 0 :: ring_size()         | '_',
-          read_loc       = 0 :: ring_loc()      | 0 | '_'   % 0 signifies a buffer that has never been read
+          read_loc       = 0 :: ring_loc()      | 0 | '_'   % 0: buffer has never been read
          }).
 
 -define(RING_SIZE,        {#ring_ro_metadata.ring_size,      0}).
@@ -78,22 +78,22 @@
 -define(LAST_READ_LOC,    {#ring_ro_metadata.read_loc,       0}).
 -define(BUMP_GENERATION,  {#ring_ro_metadata.generation,     1}).
 
--define(READ_ANTI_SWAP,   {#ring_ro_metadata.anti_swap_lock,  0}).
 -define(LOCK_ANTI_SWAP,   {#ring_ro_metadata.anti_swap_lock,  1}).
--define(UNLOCK_ANTI_SWAP, {#ring_ro_metadata.anti_swap_lock, -1}).
+-define(UNLOCK_ANTI_SWAP, {#ring_ro_metadata.anti_swap_lock,  1, 0, 0}).
 
 -define(RESERVE_READ_LOC(__Size), [?RING_BUFFER, {#ring_ro_metadata.read_loc, 1, __Size, 1}]).
 -define(RESERVE_READ_ALL_LOCS, [?RING_BUFFER, ?RING_SIZE, ?LAST_READ_LOC]).
 
 meta_key(Ring_Name) -> {meta, Ring_Name}.
 make_meta(Ring_Name, Ring_Table_Id, Size) ->
-    #ring_ro_metadata{name=meta_key(Ring_Name), buffer=Ring_Table_Id, created=os:timestamp(), ring_size=Size}.
+    #ring_ro_metadata{name    = meta_key(Ring_Name),  buffer    = Ring_Table_Id,
+                      created = os:timestamp(),       ring_size = Size}.
     
 %% Convert record to proplist.
 make_ring_proplist(#ring_ro_metadata{name={meta, Name}, generation=Gen, buffer=Buffer,
                                      created=Created, ring_size=Size, read_loc=Read_Loc}) ->
-    [{name, Name},  {generation, Gen}, {buffer, Buffer},
-     {created, Created}, {ring_size, Size}, {read_loc, Read_Loc}].
+    [{name, Name},       {generation, Gen},  {buffer,   Buffer},
+     {created, Created}, {ring_size,  Size}, {read_loc, Read_Loc}].
 
 %% Match specs for buffers.
 all_rings() ->
@@ -111,8 +111,11 @@ get_ring_size      (Ring_Name) -> get_ring_metadata_field(Ring_Name, ?RING_SIZE)
 get_ring_last_read (Ring_Name) -> get_ring_metadata_field(Ring_Name, ?LAST_READ_LOC).
 get_ring_read_all  (Ring_Name) -> get_ring_metadata_field(Ring_Name, ?RESERVE_READ_ALL_LOCS).
 
-get_ring_size_lock (Ring_Name) -> get_ring_metadata_field(Ring_Name, [?RING_SIZE, ?LOCK_ANTI_SWAP]).
 unlock_anti_swap   (Ring_Name) -> get_ring_metadata_field(Ring_Name, ?UNLOCK_ANTI_SWAP).
+get_ring_size_lock (Ring_Name) ->
+    {Size, Lock} = get_ring_metadata_field(Ring_Name, [?RING_SIZE, ?LOCK_ANTI_SWAP]),
+    {Size, Lock =:= 1}.
+            
     
 %% Reserve the next read location for the calling process to read.
 %% Since the pointer starts at 0, the reserved location is after increment
@@ -126,14 +129,22 @@ unlock_anti_swap   (Ring_Name) -> get_ring_metadata_field(Ring_Name, ?UNLOCK_ANT
 %% have obtained a read location from the single metadata record which
 %% will be highly contended itself.
 get_ring_next_read(Ring_Name) ->
-    %% Unfortunately, must fetch size before increment so we can properly wrap around the read pointer.
-    %% This creates a race that could fail when a ring buffer is replaced, so we lock against swaps.
-    try get_ring_size_lock(Ring_Name) of
-        [0, _]    -> {undefined, 0, 0};
-        [Size, _] -> [Ring_Buffer, Read_Loc] = get_ring_metadata_field(Ring_Name, ?RESERVE_READ_LOC(Size)),
-                     {Ring_Buffer, Size, Read_Loc}
+    %% Unfortunately, must fetch size before increment so we can properly
+    %% wrap around the read pointer. This creates a race that could fail
+    %% when a ring buffer is replaced, so we lock against swaps.
+    try   obtain_ring_size_lock(Ring_Name)
     after _ = unlock_anti_swap(Ring_Name)
     end.
+
+obtain_ring_size_lock(Ring_Name) ->
+   case get_ring_size_lock(Ring_Name) of
+       {0,        _} -> {undefined, 0, 0};
+       {   _, false} -> erlang:yield(),
+                        obtain_ring_size_lock(Ring_Name);
+       {Size,  true} -> [Ring_Buffer, Read_Loc]
+                            = get_ring_metadata_field(Ring_Name, ?RESERVE_READ_LOC(Size)),
+                        {Ring_Buffer, Size, Read_Loc}
+   end.
 
 %% Uses update_counter to maintain the write_concurrency lock.
 get_ring_metadata_field(Ring_Name, Update_Cmd) ->
@@ -160,8 +171,8 @@ get_ring_metadata(Ring_Name) ->
           data         :: ring_data()
          }).
 
-ring_key(Name, Loc) -> {Name, Loc}.
-make_ring_data(Name, Loc, Data) -> #ring_ro_data{key=ring_key(Name, Loc), data=Data}.
+ring_key       (Name, Loc)       -> {Name, Loc}.
+make_ring_data (Name, Loc, Data) -> #ring_ro_data{key=ring_key(Name, Loc), data=Data}.
 
 
 %%%------------------------------------------------------------------------------
@@ -246,7 +257,7 @@ clear(Ring_Name) when is_atom(Ring_Name) ->
 clear(_Ring_Name,   false) -> false;
 clear(_Ring_Name, missing) -> false;
 clear( Ring_Name, #ring_ro_metadata{anti_swap_lock=0, buffer=Ring_Buffer}) ->
-    %% Clear the pointers in the metadata first, for mmediate effect...
+    %% Clear the pointers in the metadata first, for immediate effect...
     try   reset_metadata(Ring_Name, undefined, [])
     after epocxy_ets_fsm:delete_ets_table(Ring_Buffer)
     end;
@@ -256,7 +267,7 @@ clear( Ring_Name, #ring_ro_metadata{}) ->
     clear(Ring_Name).
 
 %% @doc
-%%   Delete the ring metadata, then delete the ring data buffer. Thie function
+%%   Delete the ring metadata, then delete the ring data buffer. This function
 %%   does a read on the ring metadata table so it will incur a slow lock
 %%   penalty, but it is used infrequently.
 %% @end
@@ -283,8 +294,8 @@ delete( Ring_Name, #ring_ro_metadata{}) ->
 read(Ring_Name) when is_atom(Ring_Name) ->
     read(Ring_Name, get_ring_next_read(Ring_Name)).
 
-read(Ring_Name, false             ) -> {error, {buffer_is_empty, Ring_Name}};
-read(Ring_Name, {undefined, 0, 0} ) -> {error, {buffer_is_empty, Ring_Name}};
+read(Ring_Name, false                         ) -> {error, {buffer_is_empty, Ring_Name}};
+read(Ring_Name, {undefined,       0,        0}) -> {error, {buffer_is_empty, Ring_Name}};
 read(Ring_Name, {Ring_Buffer, _Size, Location})
   when is_integer(Location), Location > 0 ->
     read_value(Ring_Name, Ring_Buffer, Location).
@@ -316,13 +327,14 @@ ring_size(Ring_Name) when is_atom(Ring_Name) ->
 
 create_ring(Ring_Name, Ring_Buffer, Ring_Values) ->
     insert_values(Ring_Name, Ring_Buffer, Ring_Values, 1),
-    case ets:insert_new(?RING_RO_TABLE, make_meta(Ring_Name, Ring_Buffer, length(Ring_Values))) of
+    Num_Values = length(Ring_Values),
+    case ets:insert_new(?RING_RO_TABLE, make_meta(Ring_Name, Ring_Buffer, Num_Values)) of
         false -> epocxy_ets_fsm:delete_ets_table(Ring_Buffer),
                  false;
         true  -> true
     end.
 
-replace_ring(Ring_Name, New_Ring_Buffer, Ring_Values) ->
+replace_ring( Ring_Name, New_Ring_Buffer,  Ring_Values) ->
     true = insert_values(Ring_Name, New_Ring_Buffer, Ring_Values, 1),
     replace_ring(Ring_Name, New_Ring_Buffer, Ring_Values, get_ring_metadata(Ring_Name)).
 
@@ -331,12 +343,13 @@ replace_ring(_Ring_Name, New_Ring_Buffer, _Ring_Values, missing) ->
     false;
 replace_ring( Ring_Name, New_Ring_Buffer,  Ring_Values,
              #ring_ro_metadata{anti_swap_lock=0, buffer=Old_Ring_Buffer}) ->
-    try   reset_metadata (Ring_Name, New_Ring_Buffer, Ring_Values)
+    try   reset_metadata(Ring_Name, New_Ring_Buffer, Ring_Values)
     after Old_Ring_Buffer =:= undefined
               orelse epocxy_ets_fsm:delete_ets_table(Old_Ring_Buffer)
     end;
 %% Anti-swap lock is set, wait for it to clear.
 replace_ring( Ring_Name, New_Ring_Buffer,  Ring_Values, #ring_ro_metadata{}) ->
+    erlang:yield(),
     replace_ring(Ring_Name, New_Ring_Buffer, Ring_Values, get_ring_metadata(Ring_Name)).
 
 reset_metadata(Ring_Name, New_Ring_Buffer, Ring_Values) ->
