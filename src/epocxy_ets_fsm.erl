@@ -30,6 +30,7 @@
 -export([
          start_link/0,
          create_ets_table/1, create_ets_table/2,
+         create_named_ets_table/2,
          delete_ets_table/1,
          change_owner/2
         ]).
@@ -53,11 +54,12 @@
 -type ets_concurrency() :: none | read_only | write_only | read_and_write.
 -export_type([ets_concurrency/0]).
 
--spec start_link       ()                          -> {ok, pid()}.
--spec create_ets_table (ets_concurrency())         -> ets:tid().
--spec create_ets_table (atom(), ets_concurrency()) -> ets:tid().
--spec delete_ets_table (atom() | ets:tid())        -> ok.
--spec change_owner     (atom() | ets:tid(), pid()) -> ok.
+-spec start_link             ()                          -> {ok, pid()}.
+-spec create_ets_table       (ets_concurrency())         -> ets:tid().
+-spec create_ets_table       (atom(), ets_concurrency()) -> ets:tid().
+-spec create_named_ets_table (atom(), ets_concurrency()) -> ets:tid().
+-spec delete_ets_table       (atom() | ets:tid())        -> ok.
+-spec change_owner           (atom() | ets:tid(), pid()) -> ok.
 
 start_link() ->
     gen_fsm:start_link({local, ?SERVER}, ?MODULE, {}, []).
@@ -67,6 +69,11 @@ create_ets_table(Concurrency_Type) ->
     gen_fsm:sync_send_event(?SERVER, {create_ets_table, Options}).
 
 create_ets_table(Name, Concurrency_Type)
+  when is_atom(Name) ->
+    Options = make_options(Concurrency_Type),
+    gen_fsm:sync_send_event(?SERVER, {create_ets_table, Name, Options}).
+
+create_named_ets_table(Name, Concurrency_Type)
   when is_atom(Name) ->
     Options = [named_table | make_options(Concurrency_Type)],
     gen_fsm:sync_send_event(?SERVER, {create_ets_table, Name, Options}).
