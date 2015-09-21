@@ -71,7 +71,7 @@ gen_ring_names() ->
     ?LET(Ring_Names, list(atom()), Ring_Names).
 
 %% Validate any atom can be used as a ring_name and ring is empty by default.
--spec proper_check_create(config()) -> ok.
+-spec proper_new_ring_is_empty(config()) -> ok.
 proper_new_ring_is_empty(_Config) ->
     {ok, Sup_Pid} = epocxy_sup:start_link(),
     Fsm_Pid       = whereis(epocxy_ets_fsm),
@@ -89,7 +89,7 @@ proper_new_ring_is_empty(_Config) ->
     cleanup(Sup_Pid, Fsm_Pid),
     ok.
                               
-check_empty_create(Ring_Names, Sup_Pid, Fsm_Pid) ->
+check_empty_create(Ring_Names, _Sup_Pid, _Fsm_Pid) ->
     %% No rings exist yet...
     [] = ?TM:list(),
     [] = ?TM:list(missing_ring),
@@ -99,6 +99,7 @@ check_empty_create(Ring_Names, Sup_Pid, Fsm_Pid) ->
     [check_empty_ring(R) || R <- Ring_Names],
 
     ct:comment("Deleting all rings"),
+    Num_Rings = length(Ring_Names),
     Exp_Deletes = lists:duplicate(Num_Rings, true),
     Exp_Deletes = [?TM:delete(R) || R <- Ring_Names],
     [] = ?TM:list(),
