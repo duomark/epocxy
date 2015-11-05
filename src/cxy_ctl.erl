@@ -24,7 +24,8 @@
          maybe_execute_pid_link/4, maybe_execute_pid_monitor/4, 
          maybe_execute_pid_link/5, maybe_execute_pid_monitor/5,
          concurrency_types/0, history/1, history/3,
-         slow_calls/1, slow_calls/2
+         slow_calls/1, slow_calls/2,
+         high_water/1, high_water/2
         ]).
 
 -export([make_process_dictionary_default_value/2]).
@@ -39,6 +40,7 @@
 
 -type task_type() :: atom().
 -type cxy_limit() :: pos_integer() | unlimited | inline_only.
+-type cxy_clear() :: clear | no_clear.
 
 -type dict_key()       :: any().
 -type dict_value()     :: any().
@@ -69,9 +71,10 @@ make_process_dictionary_default_value(Key, Value) ->
 make_proc_values(Task_Type, Max_Procs_Allowed, Max_History, Slow_Factor_As_Percentage) ->
     Active_Procs = 0,
     Stored_Max_Procs_Value = max_procs_to_int(Max_Procs_Allowed),
+    High_Water_Procs = 0,
 
     %% Cxy counters init tuple...
-    {{Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History, Slow_Factor_As_Percentage},
+    {{Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History, Slow_Factor_As_Percentage, High_Water_Procs},
 
      %% Cumulative performance moving average init tuple...
      {make_cma_key(Task_Type), 0, 0, Max_History, Slow_Factor_As_Percentage}}.
@@ -93,13 +96,22 @@ is_valid_limit(inline_only) -> true;
 is_valid_limit(_)           -> false.
 
 %% Locations of cxy counter tuple positions used for ets:update_counter
-%% {Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History, Slow_Factor_As_Percentage}
+%% {Task_Type, Stored_Max_Procs_Value, Active_Procs, Max_History, Slow_Factor_As_Percentage, High_Water_Procs}
 -define(MAX_PROCS_POS,    2).
 -define(ACTIVE_PROCS_POS, 3).
 -define(MAX_HISTORY_POS,  4).
-    
+-define(HIGH_WATER_PROCS_POS, 6).
+
 incr_active_procs(Task_Type) ->
-    ets:update_counter(?MODULE, Task_Type, {?ACTIVE_PROCS_POS, 1}).
+    [ Active_Procs, High_Water_Procs ] =
+        ets:update_counter(?MODULE, Task_Type, [{?ACTIVE_PROCS_POS, 1}, {?HIGH_WATER_PROCS_POS, 0}]),
+    %% Use ets:update_counter to implement max(High_Water_Procs,
+    %% Active_Procs).  We use the -Active_Procs because that allows us to use
+    %% a quirk of the ets:update_counter threshold interface to atomically
+    %% maintain the max.
+    Active_Procs > -High_Water_Procs
+        andalso ets:update_counter(?MODULE, Task_Type, {?HIGH_WATER_PROCS_POS, 0, -Active_Procs, -Active_Procs}),
+    Active_Procs.
 
 decr_active_procs(Task_Type) ->
     ets:update_counter(?MODULE, Task_Type, {?ACTIVE_PROCS_POS, -1}).
@@ -577,8 +589,9 @@ fail_wrapper(inline, Call_Data, Stacktrace) -> exit       ({inline_failure, [Cal
 
 concurrency_types() ->
     [[{task_type, Task_Type}, {max_procs, int_to_max_procs(Max_Procs_Allowed)},
-      {active_procs, Active_Procs}, {max_history, Max_History}, {slow_factor_as_percentage, Slow_Factor}]
-     || {Task_Type, Max_Procs_Allowed, Active_Procs, Max_History, Slow_Factor} <- ets:tab2list(?MODULE),
+      {active_procs, Active_Procs}, {max_history, Max_History}, {slow_factor_as_percentage, Slow_Factor},
+      {high_water_procs, -High_Water_Procs}]
+     || {Task_Type, Max_Procs_Allowed, Active_Procs, Max_History, Slow_Factor, High_Water_Procs} <- ets:tab2list(?MODULE),
         is_atom(Task_Type)].
 
 
@@ -653,3 +666,27 @@ get_buffer_times(Buffer_Name, Num_Items) ->
 format_buffer_times({Task_Fun, {_,_,Micro} = Start, Spawn_Elapsed, Exec_Elapsed}) ->
     [{task_fun, Task_Fun}, {start, calendar:now_to_universal_time(Start), Micro},
      {spawn_time_micros, Spawn_Elapsed}, {exec_time_micros, Exec_Elapsed}].
+
+-define(HW_READ_CMD, {?HIGH_WATER_PROCS_POS, 0}).
+-define(HW_RESET_CMD, {?HIGH_WATER_PROCS_POS, -1, 0, 0}).
+
+%% @doc
+%%   Return the highest number of concurrent processes for a given task type.
+%%   The one-argument form just returns the high-water value, while the
+%%   two-argument form allows the value to be reset.
+%% @end
+
+-spec high_water(task_type()) -> non_neg_integer().
+-spec high_water(task_type(), cxy_clear()) -> non_neg_integer().
+
+high_water(Task_Type) ->
+  high_water(Task_Type, no_clear).
+
+high_water(Task_Type, ClearCmd) ->
+    case ClearCmd of
+        clear ->
+            [Old_High_Water, _] = ets:update_counter(?MODULE, Task_Type, [?HW_READ_CMD, ?HW_RESET_CMD]),
+            -Old_High_Water;
+        no_clear ->
+            -ets:update_counter(?MODULE, Task_Type, ?HW_READ_CMD)
+    end.
