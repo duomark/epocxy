@@ -79,10 +79,10 @@ process_data({Module, _Env} = Context) ->
 process_batch(Iteration, This_Batch, {Module, _Env} = Context, Continuation_Fn) ->
     try
         {Prepped_Batch, Context2} = Module:prep_batch(Iteration, This_Batch, Context),
-        {Reply, Context3} = case Module:exec_batch(Iteration, Prepped_Batch, Context2) of
-                                {error, Reason} = Err -> {Err, Context2};
-                                {ok, Context2a}       -> {ok, Context2a}
-                            end,
+        {_Reply, Context3} = case Module:exec_batch(Iteration, Prepped_Batch, Context2) of
+                                 {error, _Reason} = Err -> {Err, Context2};
+                                 {ok, Context2a}        -> {ok, Context2a}
+                             end,
         Next_Iteration = Iteration+1,
         case Continuation_Fn(Next_Iteration, Context3) of
             done -> done;
