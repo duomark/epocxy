@@ -23,7 +23,8 @@
          check_execute_task/1,        check_maybe_execute_task/1,
          check_execute_pid_link/1,    check_maybe_execute_pid_link/1,
          check_execute_pid_monitor/1, check_maybe_execute_pid_monitor/1,
-         check_multiple_init_calls/1, check_copying_dict/1
+         check_multiple_init_calls/1, check_copying_dict/1,
+         check_high_water/1
         ]).
 
 %% Spawned functions
@@ -41,7 +42,8 @@ all() -> [
           check_execute_task,        check_maybe_execute_task,
           check_execute_pid_link,    check_maybe_execute_pid_link,
           check_execute_pid_monitor, check_maybe_execute_pid_monitor,
-          check_multiple_init_calls, check_copying_dict
+          check_multiple_init_calls, check_copying_dict,
+          check_high_water
          ].
 
 -type config() :: proplists:proplist().
@@ -67,8 +69,8 @@ check_no_timer_limits(_Config) ->
     true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
     4 = length(All_Entries),
-    true = lists:member({a, 15, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
-    true = lists:member({b, 35, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({a, 15, 0, 0, ?MAX_SLOW_FACTOR, 0}, All_Entries),
+    true = lists:member({b, 35, 0, 0, ?MAX_SLOW_FACTOR, 0}, All_Entries),
     true = lists:member({{cma,a}, 0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
     true = lists:member({{cma,b}, 0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
     ok.
@@ -79,9 +81,9 @@ check_with_timer_limits(_Config) ->
     true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
     6 = length(All_Entries),
-    true = lists:member({a, 15, 0, 5, ?MAX_SLOW_FACTOR}, All_Entries),
-    true = lists:member({b, 35, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
-    true = lists:member({c, 17, 0, 4, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({a, 15, 0, 5, ?MAX_SLOW_FACTOR, 0}, All_Entries),
+    true = lists:member({b, 35, 0, 0, ?MAX_SLOW_FACTOR, 0}, All_Entries),
+    true = lists:member({c, 17, 0, 4, ?MAX_SLOW_FACTOR, 0}, All_Entries),
     true = lists:member({{cma,a}, 0, 0, 5, ?MAX_SLOW_FACTOR}, All_Entries),
     true = lists:member({{cma,b}, 0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
     true = lists:member({{cma,c}, 0, 0, 4, ?MAX_SLOW_FACTOR}, All_Entries),
@@ -94,10 +96,10 @@ check_atom_limits(_Config) ->
     true = ?TM:init(Limits),
     All_Entries = ets:tab2list(?TM),
     8 = length(All_Entries),
-    true = lists:member({a, -1, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
-    true = lists:member({b, -1, 0, 5, ?MAX_SLOW_FACTOR}, All_Entries),
-    true = lists:member({c,  0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
-    true = lists:member({d,  0, 0, 7, ?MAX_SLOW_FACTOR}, All_Entries),
+    true = lists:member({a, -1, 0, 0, ?MAX_SLOW_FACTOR, 0}, All_Entries),
+    true = lists:member({b, -1, 0, 5, ?MAX_SLOW_FACTOR, 0}, All_Entries),
+    true = lists:member({c,  0, 0, 0, ?MAX_SLOW_FACTOR, 0}, All_Entries),
+    true = lists:member({d,  0, 0, 7, ?MAX_SLOW_FACTOR, 0}, All_Entries),
     true = lists:member({{cma,a},  0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
     true = lists:member({{cma,b},  0, 0, 5, ?MAX_SLOW_FACTOR}, All_Entries),
     true = lists:member({{cma,c},  0, 0, 0, ?MAX_SLOW_FACTOR}, All_Entries),
@@ -515,3 +517,36 @@ check_copying_dict(_Config) ->
 
     ok.
 
+check_high_water(_Config) ->
+    {Inline_Type, Spawn_Type} = {high_water_inline, high_water_spawn},
+    Spawn_Max = 2,
+    Limits = [{Inline_Type, inline_only, 0, ?MAX_SLOW_FACTOR}, {Spawn_Type, 2, 0, ?MAX_SLOW_FACTOR}],
+    true = ?TM:init(Limits),
+
+    %% Inline task, never run more than one at a time.
+    ?TM:high_water(Inline_Type, clear),
+    0 = ?TM:high_water(Inline_Type),
+    ok = ?TM:execute_task(Inline_Type, timer, sleep, [200]), erlang:yield(),
+    ok = ?TM:execute_task(Inline_Type, timer, sleep, [200]), erlang:yield(),
+    1 = ?TM:high_water(Inline_Type),
+    1 = ?TM:high_water(Inline_Type, no_clear),
+    1 = ?TM:high_water(Inline_Type, clear),
+    0 = ?TM:high_water(Inline_Type),
+
+    %% Spawn task, run concurrently.
+    ?TM:high_water(Spawn_Type, clear),
+    0 = ?TM:high_water(Spawn_Type),
+    ok = ?TM:execute_task(Spawn_Type, timer, sleep, [200]), erlang:yield(),
+    ok = ?TM:execute_task(Spawn_Type, timer, sleep, [200]), erlang:yield(),
+    2 = ?TM:high_water(Spawn_Type, clear),
+
+    %% Spawn task, run concurrently but not more than max.
+    ok = ?TM:execute_task(Spawn_Type, timer, sleep, [200]), erlang:yield(),
+    ok = ?TM:execute_task(Spawn_Type, timer, sleep, [200]), erlang:yield(),
+    ok = ?TM:execute_task(Spawn_Type, timer, sleep, [200]), erlang:yield(),
+    ok = ?TM:execute_task(Spawn_Type, timer, sleep, [200]), erlang:yield(),
+    ok = ?TM:execute_task(Spawn_Type, timer, sleep, [200]), erlang:yield(),
+    %% 3 because 2 are spawned and 1 runs inline concurrently
+    3 = ?TM:high_water(Spawn_Type),
+
+    ok.
