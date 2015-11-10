@@ -76,14 +76,14 @@ proper_new_ring_is_empty(_Config) ->
     {ok, Sup_Pid} = epocxy_sup:start_link(),
     Fsm_Pid       = whereis(epocxy_ets_fsm),
 
-    ct:log("Test using an atom as a ring name"),
+    comment_and_log("Test using an atom as a ring name"),
     Test_Ring_Name = ?FORALL(Names, gen_ring_names(),
                              case [N || N <- Names, N =/= ''] of
                                  []         -> true;
                                  Ring_Names -> check_empty_create(Ring_Names, Sup_Pid, Fsm_Pid)
                              end),
     true = proper:quickcheck(Test_Ring_Name, ?PQ_NUM(5)),
-    ct:comment("Successfully tested atoms as ring_names"),
+    comment_and_log("Successfully tested atoms as ring_names"),
 
     %% Terminate the ets fsm server, then the epocxy supervisor.
     cleanup(Sup_Pid, Fsm_Pid),
@@ -94,11 +94,10 @@ check_empty_create(Ring_Names, _Sup_Pid, _Fsm_Pid) ->
     [] = ?TM:list(),
     [] = ?TM:list(missing_ring),
 
-    ct:comment ("Testing ring_names ~p", [Ring_Names]),
-    ct:log     ("Testing ring_names ~p", [Ring_Names]),
+    comment_and_log("Testing ring_names ~p", [Ring_Names]),
     [check_empty_ring(R) || R <- Ring_Names],
 
-    ct:comment("Deleting all rings"),
+    comment_and_log("Deleting all rings"),
     Num_Rings = length(Ring_Names),
     Exp_Deletes = lists:duplicate(Num_Rings, true),
     Exp_Deletes = [?TM:delete(R) || R <- Ring_Names],
@@ -114,3 +113,7 @@ cleanup(Pid, Fsm_Pid) ->
     supervisor:terminate_child(Pid, Fsm_Pid),
     unlink(Pid),
     exit(Pid, kill).
+
+comment_and_log(Msg)       -> comment_and_log(Msg, []).
+comment_and_log(Msg, Args) -> ct:comment (Msg, Args),
+                              ct:log     (Msg, Args).

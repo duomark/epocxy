@@ -50,7 +50,7 @@
 -type ring_error() :: {missing_ring_name,     ring_name()}
                     | {missing_ring_metadata, ring_name()}
                     | {missing_ring_data,     ring_name(), ring_loc()}
-                    | {buffer_is_empty,       ring_name()}.
+                    | {empty_ring,            ring_name()}.
 
 -export_type([ring_error/0]).
 
@@ -70,7 +70,7 @@
           anti_swap_lock = 0 :: non_neg_integer()   | '_',
           swapping_lock  = 0 :: non_neg_integer()   | '_',
           ring_size      = 0 :: ring_size()         | '_',
-          read_loc       = 0 :: ring_loc()      | 0 | '_'   % 0: buffer has never been read
+          read_loc       = 0 :: ring_loc()      | 0 | '_'   % 0 => buffer never read
          }).
 
 -define(RING_SIZE,        {#ring_ro_metadata.ring_size,      0}).
@@ -229,7 +229,8 @@ create(Ring_Name, Ring_Values)
         %%   1) Ring name already exists
         %%   2) Duplicate keys in the list of values (or someone else beat us inserting)
         false -> ets:delete(?RING_RO_TABLE, meta_key(Ring_Name)),
-                 epocxy_ets_fsm:delete_ets_table(Ring_Buffer)
+                 epocxy_ets_fsm:delete_ets_table(Ring_Buffer),
+                 false
     end.
 
 %% @doc
@@ -294,8 +295,8 @@ delete( Ring_Name, #ring_ro_metadata{}) ->
 read(Ring_Name) when is_atom(Ring_Name) ->
     read(Ring_Name, get_ring_next_read(Ring_Name)).
 
-read(Ring_Name, false                         ) -> {error, {buffer_is_empty, Ring_Name}};
-read(Ring_Name, {undefined,       0,        0}) -> {error, {buffer_is_empty, Ring_Name}};
+read(Ring_Name, false                         ) -> {error, {empty_ring, Ring_Name}};
+read(Ring_Name, {undefined,       0,        0}) -> {error, {empty_ring, Ring_Name}};
 read(Ring_Name, {Ring_Buffer, _Size, Location})
   when is_integer(Location), Location > 0 ->
     read_value(Ring_Name, Ring_Buffer, Location).
@@ -306,19 +307,23 @@ read(Ring_Name, {Ring_Buffer, _Size, Location})
 %%   the current read location forward, wrapping and reading all data.
 %% @end
 read_all(Ring_Name) when is_atom(Ring_Name) ->
-    read_all(Ring_Name, get_ring_read_all(Ring_Name)).
-
-read_all(Ring_Name, false                        ) -> {error, {buffer_missing,  Ring_Name}};
-read_all(Ring_Name, {undefined,      0,        0}) -> {error, {buffer_is_empty, Ring_Name}};
-read_all(Ring_Name, {Ring_Buffer, Size, Location})
-  when is_integer(Size),     Size > 0,
-       is_integer(Location), Location > 0 ->
-    read_all_values(Ring_Name, Ring_Buffer, Location, Size).
+    case get_ring_read_all(Ring_Name) of
+        false     -> {error, {missing_ring_metadata, Ring_Name}};
+        [_, 0, 0] -> {error, {empty_ring,            Ring_Name}};
+        [Ring_Buffer, Size, Location]
+          when is_integer(Ring_Buffer), Ring_Buffer > 0,
+               is_integer(Size),        Size > 0,
+               is_integer(Location),    Location > 0 ->
+            read_all_values(Ring_Name, Ring_Buffer, Location, Size)
+    end.
 
 %% @doc Return the ring size of a buffer.
 ring_size(Ring_Name) when is_atom(Ring_Name) ->
     ?ENSURE_METADATA,
-    get_ring_size(Ring_Name).
+    case get_ring_size(Ring_Name) of
+        false -> {error, {missing_ring_metadata, Ring_Name}};
+        Size  -> {ok, Size}
+    end.
 
 
 %%%------------------------------------------------------------------------------
@@ -326,13 +331,11 @@ ring_size(Ring_Name) when is_atom(Ring_Name) ->
 %%%------------------------------------------------------------------------------
 
 create_ring(Ring_Name, Ring_Buffer, Ring_Values) ->
-    insert_values(Ring_Name, Ring_Buffer, Ring_Values, 1),
-    Num_Values = length(Ring_Values),
-    case ets:insert_new(?RING_RO_TABLE, make_meta(Ring_Name, Ring_Buffer, Num_Values)) of
-        false -> epocxy_ets_fsm:delete_ets_table(Ring_Buffer),
-                 false;
-        true  -> true
-    end.
+    true     = insert_values(Ring_Name, Ring_Buffer, Ring_Values, 1),
+    Metadata = make_meta(Ring_Name, Ring_Buffer, length(Ring_Values)),
+    Success  = ets:insert_new(?RING_RO_TABLE, Metadata),
+    Success orelse epocxy_ets_fsm:delete_ets_table(Ring_Buffer),
+    Success.
 
 replace_ring( Ring_Name, New_Ring_Buffer,  Ring_Values) ->
     true = insert_values(Ring_Name, New_Ring_Buffer, Ring_Values, 1),
