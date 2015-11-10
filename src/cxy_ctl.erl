@@ -685,7 +685,7 @@ high_water(Task_Type) ->
 high_water(Task_Type, ClearCmd) ->
     case ClearCmd of
         clear ->
-            [Old_High_Water, _] = ets:update_counter(?MODULE, Task_Type, [?HW_READ_CMD, ?HW_RESET_CMD]),
+            [Old_High_Water, 0] = ets:update_counter(?MODULE, Task_Type, [?HW_READ_CMD, ?HW_RESET_CMD]),
             -Old_High_Water;
         no_clear ->
             -ets:update_counter(?MODULE, Task_Type, ?HW_READ_CMD)
