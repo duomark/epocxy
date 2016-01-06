@@ -363,8 +363,10 @@ fetch_item(Cache_Name, Key) ->
 %% Fetch from Generation 1 or 2, after updating with a newer key version or leaving existing newest key version.
 refresh_item(Cache_Name, Key) ->
     Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
-                           Fn_New_Cached_Value = create_new_value(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod,Fn_Key),
-                           return_cache_refresh(Fn_Cache_Name, Fn_New_Cached_Value)
+                           case create_new_value(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod,Fn_Key) of
+                               no_value_available                  -> return_cache_refresh(Fn_Cache_Name, no_value_available);
+                               {_New_Version, Fn_New_Cached_Value} -> return_cache_refresh(Fn_Cache_Name, Fn_New_Cached_Value)
+                           end
                    end,
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
                            Fn_New_Cached_Value = refresh_item(key, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id,
@@ -376,10 +378,10 @@ refresh_item(Cache_Name, Key) ->
 %% Fetch from Generation 1 or 2, after updating with a newer obj version or leaving existing newest obj version.
 refresh_item(Cache_Name, Key, {Possibly_New_Vsn, Possibly_New_Value} = Possibly_New_Object) ->
     Found_Fn     = fun(Fn_Cache_Name, _Value, _Version, Fn_New_Gen_Id, Fn_Mod, Fn_Key) ->
-                           New_Cached_Value
+                           {_Cached_Version, Fn_New_Cached_Value}
                                = insert_value_if_newer(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Mod, Fn_Key,
                                                        Possibly_New_Vsn, Possibly_New_Value),
-                           return_cache_refresh(Cache_Name, New_Cached_Value)
+                           return_cache_refresh(Cache_Name, Fn_New_Cached_Value)
                       end,
     Not_Found_Fn = fun(Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id, Fn_Mod, Fn_Key, Fn_Obj) ->
                            Fn_New_Cached_Value = refresh_item(obj, Fn_Cache_Name, Fn_New_Gen_Id, Fn_Old_Gen_Id,
@@ -423,27 +425,35 @@ refresh_item(Type, Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key, Object) ->
     try ets:lookup(Old_Gen_Id, Key) of
 
         %% Create a new Mod:create_key_value value if not in old generation...
-        [] -> refresh_now(Type, Cache_Name, New_Gen_Id, Mod, Key, Object);
+        [] -> case Type of
+                  key -> refresh_now(Type, Cache_Name, New_Gen_Id, Mod, Key, Object);
+                  obj -> case refresh_now(Type, Cache_Name, New_Gen_Id, Mod, Key, Object) of
+                             no_value_available    -> no_value_available;
+                             {_Version, Raw_Value} -> Raw_Value
+                         end
+              end;
 
         %% Otherwise, migrate the old value to the new generation...
         [#cxy_cache_value{key=Key} = Old_Obj] ->
-            insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
+            _ = insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Old_Obj),
             %% Then try to clobber it with a newly created value.
-            Cached_Value = case {Type, Object} of
-                               {key, _} ->
-                                   create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
-                               {obj, no_value_available} ->
-                                   no_value_available;
-                               {obj, _} ->
-                                   {Possibly_New_Vsn, Possibly_New_Value} = Object,
-                                   insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
-                                                         Key, Possibly_New_Vsn, Possibly_New_Value)
-                           end,
+            Cached_Value
+                = case {Type, Object} of
+                      {key, _} ->
+                          create_new_value(Cache_Name, New_Gen_Id, Mod, Key);
+                      {obj, no_value_available} ->
+                          no_value_available;
+                      {obj, _} ->
+                          {Possibly_New_Vsn, Possibly_New_Value} = Object,
+                          insert_value_if_newer(Cache_Name, New_Gen_Id, Mod,
+                                                Key, Possibly_New_Vsn, Possibly_New_Value)
+                  end,
             case Cached_Value of
-                no_value_available -> ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
-                                      ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id, Key)),
-                                      return_cache_miss(Cache_Name, no_value_available);
-                {_Version, _Value} -> return_cache_refresh(Cache_Name, Cached_Value)
+                {_Version, Raw_Value} -> return_cache_refresh(Cache_Name, Raw_Value);
+                no_value_available    ->
+                    ?WHEN_GEN_EXISTS(New_Gen_Id, ets:delete(New_Gen_Id, Key)),
+                    ?WHEN_GEN_EXISTS(Old_Gen_Id, ets:delete(Old_Gen_Id, Key)),
+                    return_cache_miss(Cache_Name, no_value_available)
             end
     catch
         %% Old generation was likely eliminated by another request, try creating a new value.
@@ -471,7 +481,7 @@ copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key) ->
 
         %% Otherwise, insert the value to the new generation...
         [#cxy_cache_value{key=Key, value=Value} = Obj] ->
-            insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Obj),
+            _ = insert_to_new_gen(Cache_Name, New_Gen_Id, Mod, Obj),
             return_cache_gen2(Cache_Name, Value)
     catch
         %% Old generation was probably eliminated by another request, try creating a new value.
@@ -481,9 +491,9 @@ copy_old_value_if_found(Cache_Name, New_Gen_Id, Old_Gen_Id, Mod, Key) ->
 
 cache_miss(Cache_Name, New_Gen_Id, Mod, Key) ->
     case create_new_value(Cache_Name, New_Gen_Id, Mod, Key) of
-        {error, _} = Error -> return_cache_miss(Cache_Name, Error);
-        no_value_available -> return_cache_miss(Cache_Name, no_value_available);
-        Cached_Value       -> return_cache_miss(Cache_Name, Cached_Value)
+        {error, _} = Error       -> return_cache_miss(Cache_Name, Error);
+        no_value_available       -> return_cache_miss(Cache_Name, no_value_available);
+        {_Version, Cached_Value} -> return_cache_miss(Cache_Name, Cached_Value)
     end.
 
 %% Count specific access requests for statistics reporting...
@@ -544,18 +554,18 @@ insert_value_if_newer(Cache_Name, New_Gen_Id, Mod, Key, Version, Value) ->
 insert_to_new_gen(Cache_Name, New_Gen_Id, Mod,
                   #cxy_cache_value{key=Key, version=Insert_Vsn, value=Insert_Value} = Obj) ->
     try ets:insert_new(New_Gen_Id, Obj) of
-        true  -> Insert_Value;
+        true  -> {Insert_Vsn, Insert_Value};
         false ->
             [#cxy_cache_value{key=Key, version=Cached_Vsn, value=Cached_Value}] = ets:lookup(New_Gen_Id, Key),
 
             %% Check the versions and keep the cached value if it is newer...
             case determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) of
-                true  -> Cached_Value;
+                cached_is_newer -> {Cached_Vsn, Cached_Value};
 
                 %% Otherwise override by re-inserting on top of the older cached value.
                 %% TODO: There is still a race condition between lookup and insert here
-                false -> true = ets:insert(New_Gen_Id, Obj),
-                         Insert_Value
+                insert_is_newer -> true = ets:insert(New_Gen_Id, Obj),
+                                   {Insert_Vsn, Insert_Value}
             end
 
     %% Somehow the New_Gen_Id cache disappeared unexpectedly.
@@ -563,15 +573,20 @@ insert_to_new_gen(Cache_Name, New_Gen_Id, Mod,
     end.
 
 determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) ->
-    case erlang:function_exported(Mod, is_later_version, 2) of
-        false -> Insert_Vsn < Cached_Vsn;
-        true  -> try Mod:is_later_version(Insert_Vsn, Cached_Vsn)
-                 catch Class:Type -> % The user-supplied function crashed, use the currently cached value.
-                         Msg = "~p:is_later_version on cache ~p crashed: {~p:~p} ~p~n",
-                         error_logger:error_msg(Msg, [Mod, Cache_Name, Class, Type,
-                                                      erlang:get_stacktrace()]),
-                         true
-                 end
+    Cached_Is_Later
+        = case erlang:function_exported(Mod, is_later_version, 2) of
+              false -> Insert_Vsn < Cached_Vsn;
+              true  -> try Mod:is_later_version(Insert_Vsn, Cached_Vsn)
+                       catch Class:Type -> % The user-supplied function crashed, use the currently cached value.
+                               Msg = "~p:is_later_version on cache ~p crashed: {~p:~p} ~p~n",
+                               error_logger:error_msg(Msg, [Mod, Cache_Name, Class, Type,
+                                                            erlang:get_stacktrace()]),
+                               true
+                       end
+          end,
+    case Cached_Is_Later of
+        true  -> cached_is_newer;
+        false -> insert_is_newer
     end.
 
         
