@@ -46,7 +46,6 @@
 
 start_link() -> supervisor:start_link({local, ?SERVER}, ?MODULE, {}).
 
-
 %% Start a non-generational cache (all data fits in memory).
 start_cache(Cache_Name, Cache_Mod)
   when is_atom(Cache_Name), is_atom(Cache_Mod) ->
@@ -84,8 +83,8 @@ start_cache(Cache_Name, Cache_Mod, Type, Threshold)
 
 -spec init({}) -> sup_init_return().
 
--define(CHILD(__Mod, __Args), {__Mod, {__Mod, start_link, __Args}, temporary, 2000, worker, [__Mod]}).
+-define(CHILD(__Mod, __Args), {__Mod, {__Mod, start_link, __Args}, transient, 2000, worker, [__Mod]}).
 
 init({}) ->
     Cache_Fsm = ?CHILD(cxy_cache_fsm, []),
-    {ok, { {simple_one_for_one, 5, 60}, [Cache_Fsm]} }.
+    {ok, { {simple_one_for_one, 5, 10}, [Cache_Fsm]} }.
