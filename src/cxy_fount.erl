@@ -42,8 +42,8 @@
         ]).
 
 %%% gen_fsm callbacks
--export([init/1, handle_event/3, handle_sync_event/4,
-         handle_info/3, terminate/3, code_change/4]).
+-export([init/1, format_status/2, handle_sync_event/4,
+         handle_event/3, handle_info/3, code_change/4, terminate/3]).
 
 %%% Internally spawned functions.
 -export([allocate_slab/5]).
@@ -186,12 +186,13 @@ get_status(Fount) ->
 %%%------------------------------------------------------------------------------
 
 -spec init({module(), pos_integer(), pos_integer()}) -> {ok, 'EMPTY', cf_state()}.
+-spec format_status(normal | terminate, list()) -> proplists:proplist().
 
 init({Fount_Behaviour, Slab_Size, Reservoir_Depth}) ->
 
     %% Spawn a new allocator for each slab desired...
     Slab_Allocator_Args = [self(), Fount_Behaviour, os:timestamp(), Slab_Size, []],
-    done = spawn_allocators(Reservoir_Depth, Slab_Allocator_Args),
+    done = spawn_link_allocators(Reservoir_Depth, Slab_Allocator_Args),
 
     %% Finish initializing, any newly allocated slabs will appear as events.
     Init_State = #cf_state{
@@ -201,12 +202,35 @@ init({Fount_Behaviour, Slab_Size, Reservoir_Depth}) ->
                    },
     {ok, 'EMPTY', Init_State}.
 
+%%% Report summarized internal state to sys:get_status or crash logging.
+format_status(_Reason, [_Dict, State]) ->
+    generate_status(State).
+
+generate_status(State_Name, State) ->
+    [{current_state, State_Name} | generate_status(State)].
+
+generate_status(#cf_state{depth=Depth, fount_count=FC, behaviour=Behaviour,
+                          num_slabs=Num_Slabs, slab_size=Slab_Size}) ->
+    Max_Pid_Count     = Depth * Slab_Size,
+    Current_Pid_Count = FC + (Num_Slabs * Slab_Size),
+    [
+     {fount_count,   FC},
+     {max_slabs,     Depth},
+     {slab_size,     Slab_Size},
+     {slab_count,    Num_Slabs},
+     {max_pids,      Max_Pid_Count},
+     {pid_count,     Current_Pid_Count},
+     {behaviour,     Behaviour}
+    ].
+
+
 %%% Spawn linked slab allocators without using lists:seq/2.
 %%% If the gen_fsm goes down, any in progress allocators should also.
-spawn_allocators(             0, _Slab_Args) -> done;
-spawn_allocators(Num_Allocators,  Slab_Args) ->
+spawn_link_allocators(             0, _Slab_Args) -> done;
+spawn_link_allocators(Num_Allocators,  Slab_Args)
+  when is_integer(Num_Allocators), Num_Allocators > 0 ->
     _ = erlang:spawn_opt(?MODULE, allocate_slab, Slab_Args, [link]),
-    spawn_allocators(Num_Allocators-1, Slab_Args).
+    spawn_link_allocators(Num_Allocators-1, Slab_Args).
 
 %%% Rely on the client behaviour to create new pids. This means using
 %%% spawn or any of the gen_*:start patterns since the pids are unsupervised.
@@ -217,7 +241,7 @@ spawn_allocators(Num_Allocators,  Slab_Args) ->
 %%% complete its task on its own timeline independently from the fount.
 allocate_slab(Parent_Pid, _Module, Start_Time, 0, Slab) ->
     Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
-    %% error_logger:error_msg("Elapsed: ~p (~p)", [Elapsed_Time, length(Slab)]),
+    %% error_logger:info_msg("Elapsed: ~p (~p)", [Elapsed_Time, length(Slab)]),
     gen_fsm:send_event(Parent_Pid, {slab, Slab, Elapsed_Time});
 
 allocate_slab(Parent_Pid,  Module, Start_Time, Num_To_Spawn, Slab)
@@ -314,15 +338,21 @@ task_pids(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
   when is_list(Msgs) ->
     %% Well, ok, twice for the message list...
     Num_Pids = length(Msgs),
-    Reply = {reply, Workers, _New_State_Fn, _New_State} = get_pids(Num_Pids, State_Fn, State),
-    [] = case Workers of
-             [] -> [];
-             _  -> lists:foldl(fun(Worker, [Next_Msg | Remaining_Msgs]) ->
-                                       send_msg(Worker, Module, Next_Msg),
-                                       Remaining_Msgs
-                               end, Msgs, Workers)
-         end,
+    Reply = get_pids(Num_Pids, State_Fn, State),
+    [] = msg_workers(Reply, Module, Msgs),
     Reply.
+
+msg_workers({reply,      [], _New_State_Fn, _New_State}, _Module, _Msgs) -> [];
+msg_workers({reply, Workers, _New_State_Fn, _New_State},  Module,  Msgs) ->
+    [] = lists:foldl(fun(Worker, [Next_Msg | Remaining_Msgs]) ->
+                             send_msg(Worker, Module, Next_Msg),
+                             Remaining_Msgs
+                     end, Msgs, Workers).
+
+send_msg(Pid, Module, Msg) ->
+    try   Module:send_msg(Pid, Msg), Pid
+    catch Class:Type -> {error, {Module, send_msg, Class, Type, Msg}}
+    end.
 
 
 %%%------------------------------------------------------------------------------
@@ -421,12 +451,7 @@ reply(Pids, New_State_Fn, New_State_Record) ->
 
 replace_slabs(Mod, Num_Slabs, Slab_Size) ->
     Slab_Allocator_Args = [self(), Mod, os:timestamp(), Slab_Size, []],
-    done = spawn_allocators(Num_Slabs, Slab_Allocator_Args).
-
-send_msg(Pid, Module, Msg) ->
-    try   Module:send_msg(Pid, Msg), Pid
-    catch Class:Type -> {error, {Module, send_msg, Class, Type, Msg}}
-    end.
+    done = spawn_link_allocators(Num_Slabs, Slab_Allocator_Args).
 
 replace_slab_then_return_fount(Pids, #cf_state{behaviour=Mod, slab_size=Slab_Size, num_slabs=Num_Slabs} = State) ->
     replace_slabs(Mod, 1, Slab_Size),
@@ -441,45 +466,28 @@ replace_slab_then_return_fount(Pids, #cf_state{behaviour=Mod, slab_size=Slab_Siz
 %%% Synchronous state functions (trigger gen_fsm:sync_send_all_state_event/2)
 %%%------------------------------------------------------------------------------
 
+get_slab_times(Fount, Fount_Time, Num_Slabs, Slabs) ->
+    Slab_Times = [Slab_Time || {_Slab, Slab_Time} <- Slabs],
+    case Fount of
+        [] -> {Slab_Times,                Num_Slabs};
+        _  -> {[Fount_Time | Slab_Times], Num_Slabs+1}
+    end.
+    
 handle_sync_event ({get_spawn_rate_per_slab}, _From, State_Name, State) ->
     #cf_state{fount={Fount, Fount_Time}, reservoir=Slabs, num_slabs=Num_Slabs} = State,
-    Slab_Times = [Slab_Time || {_Slab, Slab_Time} <- Slabs],
-    {Times, Slab_Count}
-        = case Fount of
-              [] -> {Slab_Times,                Num_Slabs};
-              _  -> {[Fount_Time | Slab_Times], Num_Slabs+1}
-          end,
+    {Times, Slab_Count} = get_slab_times(Fount, Fount_Time, Num_Slabs, Slabs),
     Rate = (lists:sum(Times) * 100 div Slab_Count) / 100,
     {reply, Rate, State_Name, State};
 
 handle_sync_event ({get_spawn_rate_per_process}, _From, State_Name, State) ->
     #cf_state{fount={Fount, Fount_Time}, reservoir=Slabs,
               fount_count=FC, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
-    Slab_Times = [Slab_Time || {_Slab, Slab_Time} <- Slabs],
-    {Times, Slab_Count}
-        = case Fount of
-              [] -> {Slab_Times,                Num_Slabs};
-              _  -> {[Fount_Time | Slab_Times], Num_Slabs+1}
-          end,
+    {Times, Slab_Count} = get_slab_times(Fount, Fount_Time, Num_Slabs, Slabs),
     Rate = (lists:sum(Times) * 100 div (FC + (Slab_Count*Slab_Size))) / 100,
     {reply, Rate, State_Name, State};
 
 handle_sync_event ({get_status}, _From, State_Name, State) ->
-    #cf_state{depth=Depth, fount_count=FC, num_slabs=Num_Slabs, slab_size=Slab_Size} = State,
-    Max_Pid_Count     = Depth * Slab_Size,
-    Current_Pid_Count = FC + (Num_Slabs * Slab_Size),
-
-    Status = [
-              {current_state, State_Name},
-              {fount_count,   FC},
-              {max_slabs,     Depth},
-              {slab_size,     Slab_Size},
-              {slab_count,    Num_Slabs},
-              {max_pids,      Max_Pid_Count},
-              {pid_count,     Current_Pid_Count},
-              {behaviour,     State#cf_state.behaviour}
-             ],
-
+    Status = generate_status(State_Name, State),
     {reply, Status, State_Name, State};
 
 %% handle_sync_event ({reinit, New_Fount_Behaviour, New_Slab_Size, New_Reservoir_Depth}, _From, State_Name,
@@ -489,7 +497,7 @@ handle_sync_event ({get_status}, _From, State_Name, State) ->
 
 %%     %% Spawn a new allocator for each slab desired...
 %%     Slab_Allocator_Args = [self(), New_Fount_Behaviour, os:timestamp(), New_Slab_Size, []],
-%%     done = spawn_allocators(Slab_Count_To_Allocate, Slab_Allocator_Args),
+%%     done = spawn_link_allocators(Slab_Count_To_Allocate, Slab_Allocator_Args),
 %%     New_State = #cf_state{
 %%                    behaviour   = New_Fount_Behaviour,
 %%                    fount       = {New_Fount, New_Time},
