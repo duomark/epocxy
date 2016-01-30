@@ -228,16 +228,18 @@ check_reservoir_refills(_Config) ->
     ct:comment(Test), ct:log(Test),
 
     Test_Allocators = 
-        ?FORALL({Slab_Size, Depth}, {range(1,20), range(2,10)},
-                ?FORALL(Num_Pids, non_empty(list(min(Slab_Size*Depth, range(1, 30)))),
-                        verify_slab_refills(Slab_Size, Depth, Num_Pids))),
+        ?FORALL({Slab_Size, Depth, Num_Pids},
+                {range(1,20), range(2,10), non_empty(list(range(1, 30)))},
+                verify_slab_refills(Slab_Size, Depth, Num_Pids)),
     true = proper:quickcheck(Test_Allocators, ?PQ_NUM(100)),
 
     Test_Complete = "Verified repeated fount requests are quickly replaced",
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
-verify_slab_refills(Slab_Size, Depth, Num_Pids) ->
+verify_slab_refills(Slab_Size, Depth, Num_Pids_Proposed) ->
+    Max_Pids = Slab_Size * Depth,
+    Num_Pids = [min(Max_Pids, N) || N <- Num_Pids_Proposed],
     ct:log("PropEr testing slab_size ~p, depth ~p with ~w get_pid_fetches",
            [Slab_Size, Depth, Num_Pids]),
     Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
