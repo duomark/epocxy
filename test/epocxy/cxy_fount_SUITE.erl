@@ -23,8 +23,9 @@
 
 %%% Test case exports
 -export([
-         check_construction/1, check_edge_pid_allocs/1, check_reservoir_refills/1,
-         check_faulty_behaviour/1
+         check_construction/1,      check_edge_pid_allocs/1,
+         check_reservoir_refills/1, check_faulty_behaviour/1,
+         report_speed/1
         ]).
 
 -include("epocxy_common_test.hrl").
@@ -39,16 +40,19 @@
 
 -spec all() -> [test_case() | {group, test_group()}].
 all() -> [
-          {group, check_create}   % Verify construction and reservoir refill.
+          %% Uncomment to test failing user-supplied module.
           %% {group, check_behaviour} % Ensure behaviour crashes properly.
+
+          {group, check_create}    % Verify construction and reservoir refill.
          ].
 
 -spec groups() -> [{test_group(), [sequence], [test_case() | {group, test_group()}]}].
 groups() -> [
-             {check_create,  [sequence],
-              [check_construction, check_edge_pid_allocs, check_reservoir_refills]}
-             %% {check_behaviour, [sequence],
-             %%  [check_faulty_behaviour]}
+             %% Uncomment to test failing user-supplied module.
+             %% {check_behaviour, [sequence], [check_faulty_behaviour]},
+
+             {check_create,    [sequence], [check_construction, check_edge_pid_allocs,
+                                            check_reservoir_refills, report_speed]}
             ].
 
 
@@ -127,7 +131,7 @@ verify_reservoir_is_full(Fount) ->
                               erlang:yield(),
                               Status = ?TM:get_status(Pid),
                               {proplists:get_value(current_state, Status), Count+1}
-                      end, {'INIT', 0}, lists:duplicate(150, Fount)),
+                      end, {'INIT', 0}, lists:duplicate(500, Fount)),
     ct:log("Looped ~p times before reservoir was ~p", [_Loops, Final_State]),
     Props = ?TM:get_status(Fount),
     [FC, Num_Slabs, Max_Slabs, Slab_Size, Pid_Count, Max_Pids]
@@ -309,3 +313,23 @@ bad_pid(Fount) ->
                 [{file, "src/cxy_fount.erl"}, {line,_}]}]}} -> crashed
     after 1000 -> timeout
     end.
+
+
+%%%===================================================================
+%%% report_speed/1
+%%%===================================================================
+-spec report_speed(config()) -> ok.
+report_speed(_Config) ->
+    Test = "Report the spawning speed",
+    ct:comment(Test), ct:log(Test),
+
+    Slab_Size = 100, Num_Slabs = 50,
+    {ok, Fount} = ?TM:start_link(cxy_fount_hello_behaviour, Slab_Size, Num_Slabs),
+    ct:log("Spawn rate per slab with ~p pids for ~p slabs: ~p microseconds",
+           [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_slab(Fount)]),
+    ct:log("Spawn rate per process with ~p pids for ~p slabs: ~p microseconds",
+           [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_process(Fount)]),
+
+    Test_Complete = "Fount reporting speed reported",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
+    ok.
