@@ -1,7 +1,7 @@
 %%%------------------------------------------------------------------------------
-%%% @copyright (c) 2015, DuoMark International, Inc.
+%%% @copyright (c) 2015-2016, DuoMark International, Inc.
 %%% @author Jay Nelson <jay@duomark.com>
-%%% @reference 2015 Development sponsored by TigerText, Inc. [http://tigertext.com/]
+%%% @reference 2015-2016 Development sponsored by TigerText, Inc. [http://tigertext.com/]
 %%% @reference The license is based on the template for Modified BSD from
 %%%   <a href="http://opensource.org/licenses/BSD-3-Clause">OSI</a>
 %%% @doc
@@ -22,7 +22,7 @@
 -include("cxy_fount.hrl").
 
 ?START_FOUNT_PID(Fount, wait_for_hello).
-send_msg  (Worker, Msg) -> spawn_link (fun() -> say_to(Worker, Msg) end).
+send_msg(Worker, Msg) -> spawn_link(fun() -> say_to(Worker, Msg) end).
 
 %% Idle workers may wait a while before being used in a test.
 wait_for_hello() ->
@@ -39,5 +39,3 @@ say_to(Worker, Msg) ->
     receive {Ref, goodbye, Now2} -> true = Now1 < Now2
     after 1000 -> throw(say_hello_timeout)
     end.
-
-

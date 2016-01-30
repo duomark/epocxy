@@ -82,26 +82,39 @@ check_construction(_Config) ->
     Test = "Check that founts can be constructed and refill fully",
     ct:comment(Test), ct:log(Test),
 
-    Case1 = "Verify construction results in a full reservoir",
-    ct:comment(Case1), ct:log(Case1),
-    Fount = start_fount(cxy_fount_hello_behaviour, 3, 5),
-    Full_Fount_Size = 3 * 5,
+    Full_Fn = ?FORALL({Slab_Size, Depth}, {range(1,37), range(2,17)},
+                      verify_full_fount(Slab_Size, Depth)),
+    true = proper:quickcheck(Full_Fn, ?PQ_NUM(5)),
 
-    Case2 = "Verify that an empty fount refills itself",
+    Test_Complete = "Fount construction and full refill verified",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
+    ok.
+
+fount_dims(Slab_Size, Depth) ->
+    "(" ++ integer_to_list(Slab_Size) ++ " pids x " ++ integer_to_list(Depth) ++ " slabs)".
+
+verify_full_fount(Slab_Size, Depth) ->
+    Fount_Dims = fount_dims(Slab_Size, Depth),
+    Case1 = "Verify construction of a " ++ Fount_Dims ++ " fount results in a full reservoir",
+    ct:comment(Case1), ct:log(Case1),
+    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
+
+    Case2 = "Verify that an empty " ++ Fount_Dims ++ " fount refills itself",
     ct:comment(Case2), ct:log(Case2),
-    Pids1 = ?TM:get_pids(Fount, Full_Fount_Size),
+    Full_Fount_Size = Depth * Slab_Size,
+    Pids1  = ?TM:get_pids(Fount, Full_Fount_Size),
     'FULL' = verify_reservoir_is_full(Fount),
-    Pids2 = ?TM:get_pids(Fount, Full_Fount_Size),
+    Pids2  = ?TM:get_pids(Fount, Full_Fount_Size),
     'FULL' = verify_reservoir_is_full(Fount),
 
     Case3 = "Verify that fetches get different pids",
     ct:comment(Case3), ct:log(Case3),
     true = sets:is_disjoint(sets:from_list(Pids1), sets:from_list(Pids2)),
 
-    Test_Complete = "Fount construction verified",
-    ct:comment(Test_Complete), ct:log(Test_Complete),
-    ok.
-
+    Complete = "Fount " ++ Fount_Dims ++ " construction verified",
+    ct:comment(Complete), ct:log(Complete),
+    true.
+    
 start_fount(Behaviour, Slab_Size, Depth) ->
     {ok, Fount} = ?TM:start_link(Behaviour, Slab_Size, Depth),
     'FULL' = verify_reservoir_is_full(Fount),
@@ -114,7 +127,7 @@ verify_reservoir_is_full(Fount) ->
                               erlang:yield(),
                               Status = ?TM:get_status(Pid),
                               {proplists:get_value(current_state, Status), Count+1}
-                      end, {'INIT', 0}, lists:duplicate(50, Fount)),
+                      end, {'INIT', 0}, lists:duplicate(150, Fount)),
     ct:log("Looped ~p times before reservoir was ~p", [_Loops, Final_State]),
     Props = ?TM:get_status(Fount),
     [FC, Num_Slabs, Max_Slabs, Slab_Size, Pid_Count, Max_Pids]
@@ -135,52 +148,71 @@ check_edge_pid_allocs(_Config) ->
     Test = "Check that founts can dole out various sized lists of pids",
     ct:comment(Test), ct:log(Test),
 
-    Case1 = "Verify construction results in a full reservoir",
+    Edge_Fn = ?FORALL({Slab_Size, Depth}, {range(1,37), range(2,17)},
+                      verify_edges(Slab_Size, Depth)),
+    true = proper:quickcheck(Edge_Fn, ?PQ_NUM(5)),
+
+    Test_Complete = "Reservoir refill edge conditions verified",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
+    ok.
+
+verify_edge(Fount, Alloc_Size) ->
+    Pids = ?TM:get_pids(Fount, Alloc_Size),
+    'FULL' = verify_reservoir_is_full(Fount),
+    Pids.
+    
+verify_edges(Slab_Size, Depth) ->
+    Fount_Dims = fount_dims(Slab_Size, Depth),
+    Case1 = "Verify reservoir " ++ Fount_Dims ++ " fount refill edge conditions",
     ct:comment(Case1), ct:log(Case1),
-    Slab_Size = 4, Depth = 7,
+
     Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
 
-    Case2 = "Verify allocation in slab multiples",
+    Case2 = "Verify " ++ Fount_Dims ++ " fount allocation in slab multiples",
     ct:comment(Case2), ct:log(Case2),
-    Pids1 = ?TM:get_pids(Fount, Slab_Size),
-    'FULL' = verify_reservoir_is_full(Fount),
-    Pids2 = ?TM:get_pids(Fount, Slab_Size * 2),
-    'FULL' = verify_reservoir_is_full(Fount),
-    Pids3 = ?TM:get_pids(Fount, Slab_Size * 3),
-    'FULL' = verify_reservoir_is_full(Fount),
+    Multiples = [N * Slab_Size || N <- [1,2,3]],
+    [Pids1, Pids2, Pids3]
+        = [verify_edge(Fount, Alloc_Size) || Alloc_Size <- Multiples],
 
+    %% Deviate from slab modulo arithmetic...
     Pids4 = [?TM:get_pid(Fount), ?TM:get_pid(Fount)],
-    Pids5 = ?TM:get_pids(Fount, Slab_Size),
-    'FULL' = verify_reservoir_is_full(Fount),
-    Pids6 = ?TM:get_pids(Fount, Slab_Size * 2),
-    'FULL' = verify_reservoir_is_full(Fount),
-    Pids7 = ?TM:get_pids(Fount, Slab_Size * 3),
-    'FULL' = verify_reservoir_is_full(Fount),
+
+    [Pids5, Pids6, Pids7]
+        = [verify_edge(Fount, Alloc_Size) || Alloc_Size <- Multiples],
 
     %% Make sure all pids are unique
     All_Pids = lists:append([Pids1, Pids2, Pids3, Pids4, Pids5, Pids6, Pids7]),
     Num_Pids = length(All_Pids),
     Num_Pids = sets:size(sets:from_list(All_Pids)),
     
-    Case3 = "Verify allocation in < slab counts",
+    Get8_Count = max(1, Slab_Size div 3),
+    Get9_Count = max(1, Slab_Size div 2),
+    Case3 = "Verify " ++ Fount_Dims ++ " allocation in < slab counts ("
+        ++ integer_to_list(Get8_Count) ++ "," ++ integer_to_list(Get9_Count) ++ ")",
     ct:comment(Case3), ct:log(Case3),
-    Pids8 = ?TM:get_pids(Fount, 3),
-    Pids9 = ?TM:get_pids(Fount, 2),
-    {3,2} = {length(Pids8), length(Pids9)},
+    Pids8 = ?TM:get_pids(Fount, Get8_Count),
+    Pids9 = ?TM:get_pids(Fount, Get9_Count),
+    {Get8_Count, Get9_Count} = {length(Pids8), length(Pids9)},
     true = sets:is_disjoint(sets:from_list(Pids8), sets:from_list(Pids9)),
     'FULL' = verify_reservoir_is_full(Fount),
 
-    Case4 = "Verify allocation in > slab counts",
+    Max_Pids = Slab_Size * Depth,
+    Get10_Count = min(Max_Pids, round(Slab_Size * 2.4)),
+    Get11_Count = min(Max_Pids, round(Slab_Size * 1.7)),
+    Case4 = "Verify " ++ Fount_Dims ++ " allocation in > slab counts ("
+        ++ integer_to_list(Get10_Count) ++ "," ++ integer_to_list(Get11_Count) ++ ")",
     ct:comment(Case4), ct:log(Case4),
-    Pids10 = ?TM:get_pids(Fount, 13),
-    Pids11 = ?TM:get_pids(Fount, 7),
-    {13,7} = {length(Pids10), length(Pids11)},
+    'FULL' = verify_reservoir_is_full(Fount),
+    Pids10 = ?TM:get_pids(Fount, Get10_Count),
+    'FULL' = verify_reservoir_is_full(Fount),
+    Pids11 = ?TM:get_pids(Fount, Get11_Count),
+    {Get10_Count, Get11_Count} = {length(Pids10), length(Pids11)},
     true = sets:is_disjoint(sets:from_list(Pids10), sets:from_list(Pids11)),
     'FULL' = verify_reservoir_is_full(Fount),
 
-    Test_Complete = "Fount pid allocation verified",
+    Test_Complete = "Fount " ++ Fount_Dims ++ " pid allocation verified",
     ct:comment(Test_Complete), ct:log(Test_Complete),
-    ok.
+    true.
         
 
 %%%===================================================================
@@ -188,38 +220,41 @@ check_edge_pid_allocs(_Config) ->
 %%%===================================================================
 -spec check_reservoir_refills(config()) -> ok.
 check_reservoir_refills(_Config) ->
-    ct:comment("Check that repeated fount requests are quickly replaced"),
+    Test = "Check that repeated fount requests are quickly replaced",
+    ct:comment(Test), ct:log(Test),
+
     Test_Allocators = 
-        ?FORALL({Slab_Size, Depth, Num_Pids},
-                {range(1,20), range(2,10), non_empty(list(range(1,30)))},
-                begin
-                    ct:log(io_lib:format("PropEr testing slab_size ~p, depth ~p",
-                                         [Slab_Size, Depth])),
-                    ct:log(io_lib:format("Testing ~w get_pid fetches", [Num_Pids])),
-                    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
-                    ct:log(io_lib:format("Testing get",  [])),
-                    [validate_pids(Fount, N, Depth*Slab_Size,  get) || N <- Num_Pids],
-                    ct:log(io_lib:format("Testing task", [])),
-                    [validate_pids(Fount, N, Depth*Slab_Size, task) || N <- Num_Pids],
-                    true
-                end),
+        ?FORALL({Slab_Size, Depth}, {range(1,20), range(2,10)},
+                ?FORALL(Num_Pids, non_empty(list(min(Slab_Size*Depth, range(1, 30)))),
+                        verify_slab_refills(Slab_Size, Depth, Num_Pids))),
     true = proper:quickcheck(Test_Allocators, ?PQ_NUM(100)),
-        
-    Test_Complete = "No failures detected",
+
+    Test_Complete = "Verified repeated fount requests are quickly replaced",
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
-validate_pids(Fount, Num_Pids, Max_Available, Task_Or_Get) ->
+verify_slab_refills(Slab_Size, Depth, Num_Pids) ->
+    ct:log("PropEr testing slab_size ~p, depth ~p with ~w get_pid_fetches",
+           [Slab_Size, Depth, Num_Pids]),
+    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
+
+    ct:log("Testing get"),
+    [verify_pids(Fount, N, Depth*Slab_Size,  get) || N <- Num_Pids],
+    ct:log("Testing task"),
+    [verify_pids(Fount, N, Depth*Slab_Size, task) || N <- Num_Pids],
+    true.
+
+verify_pids(Fount, Num_Pids, Max_Available, Task_Or_Get) ->
     erlang:yield(),
     Pids = case Task_Or_Get of
-               get  -> ?TM:get_pids(Fount, Num_Pids);
-               task -> ?TM:task_pids(Fount, lists:duplicate(Num_Pids, hello))
+               get  -> ?TM:get_pids  (Fount, Num_Pids);
+               task -> ?TM:task_pids (Fount, lists:duplicate(Num_Pids, hello))
            end,
     case Max_Available >= Num_Pids of
         false -> [] = Pids,
-                 verify_reservoir_is_full(Fount);
+                 'FULL' = verify_reservoir_is_full(Fount);
         true  -> case length(Pids) of
-                     0 -> ran_out;
+                     0        -> ran_out;
                      Num_Pids -> allocated
                  end,
 
