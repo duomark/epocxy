@@ -152,7 +152,8 @@ check_edge_pid_allocs(_Config) ->
     Test = "Check that founts can dole out various sized lists of pids",
     ct:comment(Test), ct:log(Test),
 
-    Edge_Fn = ?FORALL({Slab_Size, Depth}, {range(1,37), range(2,17)},
+    %% Depth at least 3 to avoid 'FULL' with depth 3 or less and partial fount.
+    Edge_Fn = ?FORALL({Slab_Size, Depth}, {range(1,37), range(4,17)},
                       verify_edges(Slab_Size, Depth)),
     true = proper:quickcheck(Edge_Fn, ?PQ_NUM(5)),
 
@@ -237,50 +238,53 @@ check_reservoir_refills(_Config) ->
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
-verify_slab_refills(Slab_Size, Depth, Num_Pids_Proposed) ->
-    Max_Pids = Slab_Size * Depth,
-    Num_Pids = [min(Max_Pids, N) || N <- Num_Pids_Proposed],
+verify_slab_refills(Slab_Size, Depth, Num_Pids) ->
     ct:log("PropEr testing slab_size ~p, depth ~p with ~w get_pid_fetches",
            [Slab_Size, Depth, Num_Pids]),
     Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
 
     ct:log("Testing get"),
-    [verify_pids(Fount, N, Depth*Slab_Size,  get) || N <- Num_Pids],
+    [verify_pids(Fount, N, Slab_Size, Depth,  get) || N <- Num_Pids],
     ct:log("Testing task"),
-    [verify_pids(Fount, N, Depth*Slab_Size, task) || N <- Num_Pids],
+    [verify_pids(Fount, N, Slab_Size, Depth, task) || N <- Num_Pids],
     true.
 
-verify_pids(Fount, Num_Pids, Max_Available, Task_Or_Get) ->
+verify_pids(Fount, Num_Pids, Slab_Size, Depth, Task_Or_Get) ->
     erlang:yield(),
     Pids = case Task_Or_Get of
                get  -> ?TM:get_pids  (Fount, Num_Pids);
                task -> ?TM:task_pids (Fount, lists:duplicate(Num_Pids, hello))
            end,
-    case Max_Available >= Num_Pids of
-        false -> [] = Pids,
-                 'FULL' = verify_reservoir_is_full(Fount);
-        true  -> case length(Pids) of
-                     0        -> ran_out;
-                     Num_Pids -> allocated
-                 end,
-
-                 %% make sure workers are unlinked, then kill them.
-                 [begin
-                      case process_info(Pid, links) of
-                          undefined      -> skip;
-                          {links, Links} ->
-                              false = lists:member(Pid, Links),
-                              Task_Or_Get =:= task
-                                  orelse cxy_fount_hello_behaviour:say_to(Pid, hello)
-                              %% Killing crashes the test, but normal end above doesn't???
-                              %% exit(Pid, kill)
-                      end
-                  end || Pid <- Pids],
-
-                 %% check that the reservoir is 'FULL' again
-                 'FULL' = verify_reservoir_is_full(Fount)
+    case Num_Pids of
+        Num_Pids when Num_Pids > Slab_Size * Depth ->
+            [] = Pids,
+            'FULL' = verify_reservoir_is_full(Fount);
+        Num_Pids when Num_Pids > Slab_Size * (Depth - 1) ->
+            case length(Pids) of
+                0        -> 'FULL' = verify_reservoir_is_full(Fount);
+                Num_Pids ->
+                    Num_Pids = length(Pids),
+                    _ = unlink_workers(Pids, Task_Or_Get),
+                    'FULL' = verify_reservoir_is_full(Fount)
+            end;
+        Num_Pids ->
+            Num_Pids = length(Pids),
+            _ = unlink_workers(Pids, Task_Or_Get),
+            'FULL' = verify_reservoir_is_full(Fount)
     end.
 
+unlink_workers(Pids, Task_Or_Get) ->
+    [begin
+         case process_info(Pid, links) of
+             undefined      -> skip;
+             {links, Links} ->
+                 false = lists:member(Pid, Links),
+                 Task_Or_Get =:= task
+                     orelse cxy_fount_hello_behaviour:say_to(Pid, hello)
+                 %% Killing crashes the test, but normal end above doesn't???
+                 %% exit(Pid, kill)
+         end
+     end || Pid <- Pids].
 
 %%%===================================================================
 %%% check_faulty_behaviour/1
@@ -325,12 +329,16 @@ report_speed(_Config) ->
     Test = "Report the spawning speed",
     ct:comment(Test), ct:log(Test),
 
-    Slab_Size = 100, Num_Slabs = 50,
-    {ok, Fount} = ?TM:start_link(cxy_fount_hello_behaviour, Slab_Size, Num_Slabs),
-    ct:log("Spawn rate per slab with ~p pids for ~p slabs: ~p microseconds",
-           [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_slab(Fount)]),
-    ct:log("Spawn rate per process with ~p pids for ~p slabs: ~p microseconds",
-           [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_process(Fount)]),
+    lists:foreach(
+      fun({Slab_Size, Num_Slabs}) ->
+              {ok, Fount} = ?TM:start_link(cxy_fount_hello_behaviour, Slab_Size, Num_Slabs),
+              ct:log("Spawn rate per slab with ~p pids for ~p slabs: ~p microseconds",
+                     [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_slab(Fount)]),
+              ct:log("Spawn rate per process with ~p pids for ~p slabs: ~p microseconds",
+                     [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_process(Fount)]),
+              cxy_fount:stop(Fount)
+
+      end, [{5,100}, {100, 50}, {1000, 50}]),
 
     Test_Complete = "Fount reporting speed reported",
     ct:comment(Test_Complete), ct:log(Test_Complete),

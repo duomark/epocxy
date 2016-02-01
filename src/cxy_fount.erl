@@ -38,7 +38,8 @@
          task_pid/2,   task_pids/2,     % Send message to pid
          get_spawn_rate_per_slab/1,     % Report the spawn allocator slab rate
          get_spawn_rate_per_process/1,  % Report the spawn allocator process rate
-         get_status/1                   % Get status of Fount
+         get_status/1,                  % Get status of Fount
+         stop/1
         ]).
 
 %%% gen_fsm callbacks
@@ -114,6 +115,9 @@ start_link(Fount_Name, Fount_Behaviour, Slab_Size, Reservoir_Depth)
     gen_fsm:start_link({local, Fount_Name}, ?MODULE,
                        {Fount_Behaviour, Slab_Size, Reservoir_Depth}, []).
 
+stop(Fount) ->
+    gen_fsm:sync_send_all_state_event(Fount, {stop}).
+
 
 %%% Reinitialize the fount configuration parameters
 %% -spec reinit(fount_ref(), module())                               -> ok.
@@ -137,8 +141,7 @@ start_link(Fount_Name, Fount_Behaviour, Slab_Size, Reservoir_Depth)
 get_pid(Fount) ->
     gen_fsm:sync_send_event(Fount, {get_pids, 1}, default_notify_timeout()).
 
-get_pids(Fount, Num)
-  when is_integer(Num), Num >= 0 ->
+get_pids(Fount, Num) when is_integer(Num), Num >= 0 ->
     gen_fsm:sync_send_event(Fount, {get_pids, Num}, default_notify_timeout()).
 
 
@@ -148,9 +151,8 @@ get_pids(Fount, Num)
 task_pid(Fount, Msg) ->
     gen_fsm:sync_send_event(Fount, {task_pids, [Msg]}, default_notify_timeout()).
 
-task_pids(Fount, Msgs)
-  when is_list(Msgs) ->
-    gen_fsm:sync_send_event(Fount, {task_pids, Msgs}, default_notify_timeout()).
+task_pids(Fount, Msgs) when is_list(Msgs) ->
+    gen_fsm:sync_send_event(Fount, {task_pids,  Msgs}, default_notify_timeout()).
 
 
 -type status_attr() :: {current_state, atom()}              % FSM State function name
@@ -162,18 +164,11 @@ task_pids(Fount, Msgs)
 
 -spec get_spawn_rate_per_slab    (fount_ref()) -> [microseconds()].
 -spec get_spawn_rate_per_process (fount_ref()) -> [microseconds()].
-
-get_spawn_rate_per_slab(Fount) -> 
-    gen_fsm:sync_send_all_state_event(Fount, {get_spawn_rate_per_slab}).
-
-get_spawn_rate_per_process(Fount) -> 
-    gen_fsm:sync_send_all_state_event(Fount, {get_spawn_rate_per_process}).
-    
-
 -spec get_status (fount_ref()) -> [status_attr(), ...].
 
-get_status(Fount) ->
-    gen_fsm:sync_send_all_state_event(Fount, {get_status}).
+get_spawn_rate_per_slab    (Fount) -> gen_fsm:sync_send_all_state_event(Fount, {get_spawn_rate_per_slab}).
+get_spawn_rate_per_process (Fount) -> gen_fsm:sync_send_all_state_event(Fount, {get_spawn_rate_per_process}).
+get_status                 (Fount) -> gen_fsm:sync_send_all_state_event(Fount, {get_status}).
 
 
 %%%===================================================================
@@ -339,15 +334,16 @@ task_pids(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
     %% Well, ok, twice for the message list...
     Num_Pids = length(Msgs),
     Reply = get_pids(Num_Pids, State_Fn, State),
-    [] = msg_workers(Reply, Module, Msgs),
+    all_sent = msg_workers(Reply, Module, Msgs),
     Reply.
 
-msg_workers({reply,      [], _New_State_Fn, _New_State}, _Module, _Msgs) -> [];
+msg_workers({reply,      [], _New_State_Fn, _New_State}, _Module, _Msgs) -> all_sent;
 msg_workers({reply, Workers, _New_State_Fn, _New_State},  Module,  Msgs) ->
     [] = lists:foldl(fun(Worker, [Next_Msg | Remaining_Msgs]) ->
                              send_msg(Worker, Module, Next_Msg),
                              Remaining_Msgs
-                     end, Msgs, Workers).
+                     end, Msgs, Workers),
+    all_sent.
 
 send_msg(Pid, Module, Msg) ->
     try   Module:send_msg(Pid, Msg), Pid
@@ -506,6 +502,12 @@ handle_sync_event ({get_status}, _From, State_Name, State) ->
 %%                    slab_size   = New_Slab_Size
 %%                   },
 %%     {reply, ok, State_Name, New_State};
+     
+handle_sync_event ({stop},       _From, State_Name, #cf_state{} = State) ->
+    #cf_state{fount={Fount, _Fount_Time}, reservoir=Raw_Slabs, num_slabs=Num_Slabs} = State,
+    Slabs = [Slab || {Slab, _Slab_Time} <- Raw_Slabs],
+    lists:foreach(fun(Slab) -> [unlink(Pid) || Pid <- Slab] end, [Fount | Slabs]),
+    {stop, normal, ok, State};
      
 handle_sync_event (_Event,       _From, State_Name, #cf_state{} = State) ->
     {reply, ignored, State_Name, State}.
