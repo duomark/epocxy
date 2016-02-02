@@ -131,7 +131,7 @@ verify_reservoir_is_full(Fount) ->
                               erlang:yield(),
                               Status = ?TM:get_status(Pid),
                               {proplists:get_value(current_state, Status), Count+1}
-                      end, {'INIT', 0}, lists:duplicate(500, Fount)),
+                      end, {'INIT', 0}, lists:duplicate(1000, Fount)),
     ct:log("Looped ~p times before reservoir was ~p", [_Loops, Final_State]),
     Props = ?TM:get_status(Fount),
     [FC, Num_Slabs, Max_Slabs, Slab_Size, Pid_Count, Max_Pids]
@@ -332,13 +332,14 @@ report_speed(_Config) ->
     lists:foreach(
       fun({Slab_Size, Num_Slabs}) ->
               {ok, Fount} = ?TM:start_link(cxy_fount_hello_behaviour, Slab_Size, Num_Slabs),
+              'FULL' = verify_reservoir_is_full(Fount),   % Give it a chance to fill up
               ct:log("Spawn rate per slab with ~p pids for ~p slabs: ~p microseconds",
                      [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_slab(Fount)]),
               ct:log("Spawn rate per process with ~p pids for ~p slabs: ~p microseconds",
                      [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_process(Fount)]),
               cxy_fount:stop(Fount)
-
-      end, [{5,100}, {100, 50}, {1000, 50}]),
+      end, [{5,100}, {20, 50}, {40, 50}, {60, 50}, {80, 50}, {100, 50},
+            {150, 50}, {200, 50}, {250, 50}, {300, 50}, {500, 50}]),
 
     Test_Complete = "Fount reporting speed reported",
     ct:comment(Test_Complete), ct:log(Test_Complete),
