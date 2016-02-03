@@ -125,22 +125,29 @@ start_fount(Behaviour, Slab_Size, Depth) ->
     Fount.
 
 verify_reservoir_is_full(Fount) ->
-    {Final_State, _Loops}
-        = lists:foldl(fun (_Pid, {'FULL', N}) -> {'FULL', N};
-                          ( Pid, {_,  Count}) ->
-                              erlang:yield(),
-                              Status = ?TM:get_status(Pid),
-                              {proplists:get_value(current_state, Status), Count+1}
-                      end, {'INIT', 0}, lists:duplicate(1000, Fount)),
-    ct:log("Looped ~p times before reservoir was ~p", [_Loops, Final_State]),
-    Props = ?TM:get_status(Fount),
+    verify_reservoir_is_full(Fount, 1000, 1).
+
+verify_reservoir_is_full(Fount, Max_Tries, Count) ->
+    erlang:yield(),
+    Status = ?TM:get_status(Fount),
+    case {proplists:get_value(current_state, Status), Count} of
+        {State,  Max_Tries} -> finish_full(Max_Tries, State,  Status);
+        {'FULL',     Count} -> finish_full(    Count, 'FULL', Status);
+        _Not_Full_Yet       -> verify_reservoir_is_full(Fount, Max_Tries, Count+1)
+    end.
+
+finish_full(Attempts, Final_State, Status) ->
+    ct:log("Looped ~p times before reservoir was ~p", [Attempts, Final_State]),
     [FC, Num_Slabs, Max_Slabs, Slab_Size, Pid_Count, Max_Pids]
-        = [proplists:get_value(P, Props)
+        = [proplists:get_value(P, Status)
            || P <- [fount_count, slab_count, max_slabs, slab_size, pid_count, max_pids]],
     Ok_Full_Count = (Max_Pids - Pid_Count) < Slab_Size,
     Ok_Slab_Count = (Max_Slabs - 1) =:= Num_Slabs andalso FC > 0,
-    {true, true, FC, Num_Slabs, Slab_Size, Max_Pids, Final_State, _Loops}
-        = {Ok_Full_Count, Ok_Slab_Count, FC, Num_Slabs, Slab_Size, Max_Pids, Final_State, _Loops},
+
+    %% Provide extra data on failure
+    {true, true, FC, Num_Slabs, Slab_Size, Max_Pids, Final_State, Attempts}
+        = {Ok_Full_Count, Ok_Slab_Count, FC, Num_Slabs, Slab_Size,
+           Max_Pids, Final_State, Attempts},
     Final_State.
 
 
@@ -333,10 +340,14 @@ report_speed(_Config) ->
       fun({Slab_Size, Num_Slabs}) ->
               {ok, Fount} = ?TM:start_link(cxy_fount_hello_behaviour, Slab_Size, Num_Slabs),
               'FULL' = verify_reservoir_is_full(Fount),   % Give it a chance to fill up
-              ct:log("Spawn rate per slab with ~p pids for ~p slabs: ~p microseconds",
-                     [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_slab(Fount)]),
               ct:log("Spawn rate per process with ~p pids for ~p slabs: ~p microseconds",
                      [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_process(Fount)]),
+              ct:log("Spawn rate per slab with ~p pids for ~p slabs: ~p microseconds",
+                     [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_slab(Fount)]),
+              ct:log("Replacement rate per process with ~p pids for ~p slabs: ~p microseconds",
+                     [Slab_Size, Num_Slabs, cxy_fount:get_total_rate_per_process(Fount)]),
+              ct:log("Replacement rate per slab with ~p pids for ~p slabs: ~p microseconds",
+                     [Slab_Size, Num_Slabs, cxy_fount:get_total_rate_per_slab(Fount)]),
               cxy_fount:stop(Fount)
       end, [{5,100}, {20, 50}, {40, 50}, {60, 50}, {80, 50}, {100, 50},
             {150, 50}, {200, 50}, {250, 50}, {300, 50}, {500, 50}]),
