@@ -44,7 +44,6 @@
 %%% API
 -export([start_link/1, start_link/2,    % Fount with no name
          start_link/3, start_link/4,    % Fount with name
-%%         reinit/1,     reinit/2,        % Reset configuration
          get_pid/1,    get_pids/2,      % Get 1 pid or list of pids
          task_pid/2,   task_pids/2,     % Send message to pid
          get_total_rate_per_slab/1,     % Report the round trip allocator slab rate
@@ -186,22 +185,6 @@ set_notifier(Fount, Pid)
 
 stop(Fount) ->
     gen_fsm:sync_send_all_state_event(Fount, {stop}).
-
-
-%%% Reinitialize the fount configuration parameters
-%% -spec reinit(fount_ref(), module())                               -> ok.
-%% -spec reinit(fount_ref(), module(), pos_integer(), pos_integer()) -> ok.
-
-%% reinit(Fount, Fount_Behaviour)
-%%   when is_atom (Fount) orelse is_pid (Fount),
-%%        is_atom (Fount_Behaviour) ->
-%%     reinit(Fount, Fount_Behaviour, default_slab_size(), default_num_slabs()).
-%% reinit(Fount, Fount_Behaviour, Slab_Size, Reservoir_Depth)
-%%   when is_atom (Fount) orelse is_pid (Fount),
-%%        is_atom (Fount_Behaviour),
-%%        is_integer (Slab_Size), Slab_Size > 0,
-%%        is_integer (Reservoir_Depth), Reservoir_Depth >= 2 ->
-%%     gen_fsm:sync_send_all_event(Fount, {reinit, Fount_Behaviour, Slab_Size, Reservoir_Depth}).
 
 
 -spec get_pid  (fount_ref())                -> [pid()] | {error, any()}.
@@ -642,23 +625,6 @@ handle_sync_event ({get_spawn_rate_per_process}, _From, State_Name, State) ->
 handle_sync_event ({get_status}, _From, State_Name, State) ->
     {reply, generate_status(State_Name, State), State_Name, State};
 
-%% handle_sync_event ({reinit, New_Fount_Behaviour, New_Slab_Size, New_Reservoir_Depth}, _From, State_Name,
-%%                    #cf_state{behaviour=New_Fount_Behaviour, fount={Fount, Time}, reservoir=Slabs, fount_count=FC, slab_size=Old_Slab_Size} = State) ->
-%%     {Slab_Count_To_Allocate, New_Fount_Count, New_Fount, New_Time}
-%%         = kill_idle_slabs(Old_Slab_Size, Slabs, FC, Fount, New_Reservoir_Depth),
-
-%%     %% Spawn a new allocator for each slab desired...
-%%     Slab_Allocator_Args = [self(), New_Fount_Behaviour, os:timestamp(), New_Slab_Size, []],
-%%     done = spawn_link_allocators(Slab_Count_To_Allocate, Slab_Allocator_Args),
-%%     New_State = #cf_state{
-%%                    behaviour   = New_Fount_Behaviour,
-%%                    fount       = {New_Fount, New_Time},
-%%                    fount_count = New_Fount_Count,
-%%                    reservoir   = [],
-%%                    slab_size   = New_Slab_Size
-%%                   },
-%%     {reply, ok, State_Name, New_State};
-
 handle_sync_event ({set_notifier, Pid}, _From, State_Name, #cf_state{} = State)
   when Pid =:= undefined; is_pid(Pid) ->
     {reply, ok, State_Name, State#cf_state{notifier=Pid}};
@@ -674,14 +640,6 @@ stop_workers(State) ->
 
 stop_worker(Pid) -> unlink(Pid), exit(Pid, kill).
     
-
-%% kill_idle_slabs(_Slab_Size,    [] = _Slabs,      0,   [], New_Num_Slabs) -> {New_Num_Slabs,         0,   []};
-%% kill_idle_slabs(_Slab_Size,    [] = _Slabs,  Count, Pids, New_Num_Slabs) -> {New_Num_Slabs - 1, Count, Pids};
-%% kill_idle_slabs( Slab_Size, [H|T] = _Slabs, _Count, Pids, New_Num_Slabs) ->
-%%     _ = [ [stop_worker(Pid) || Pid <- Slab] || Slab <- T],
-%%     _ = [  stop_worker(Pid) || Pid <- Pids],
-%%     {Num_Slabs - 1, Slab_Size, H}.
-
 
 %%%===================================================================
 %%% Unused functions
