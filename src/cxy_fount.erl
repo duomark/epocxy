@@ -27,6 +27,9 @@
 %%%   monitored so that if it crashes, it will be removed as a valid
 %%%   notifier.
 %%%
+%%%   If you need to change the slab / depth allocations, just make a new
+%%%   fount and call stop/1 on this fount.
+%%%
 %%%   WARNING: the fount will crash if your Fount_Behaviour:start_pid/1
 %%%   callback returns anything other than a pid().
 %%% @since 0.9.9
@@ -66,6 +69,46 @@
 -export(['EMPTY'/2, 'FULL'/2, 'LOW'/2]).
 -export(['EMPTY'/3, 'FULL'/3, 'LOW'/3]).
 
+%%% cxy_fount behaviour callbacks
+-type fount_ref() :: pid() | atom().  % gen_fsm reference
+-export_type([fount_ref/0]).
+
+%%%===================================================================
+%%% Behaviour callback helper functions
+%%%
+%%%   Call one of these functions from your implementation of
+%%%   start_pid/1 to spawn and initialize a worker. The workers
+%%%   will be linked to Fount automatically by using these functions.
+%%%   Not using these functions can result in process leaks.
+%%%===================================================================
+
+-callback start_pid (fount_ref())     -> pid()  | {error, Reason::any()}.
+-callback send_msg  (Worker, tuple()) -> Worker | {error, Reason::any()}
+                                             when Worker :: pid().
+
+%%% Support functions for spawning workers in a behaviour module.
+-export([spawn_worker/2, spawn_worker/3, spawn_worker/4]).
+
+spawn_worker(Fount, Function)
+  when is_pid  (Fount), is_function(Function, 0);
+       is_atom (Fount), is_function(Function, 0) ->
+    spawn(fun() -> link(Fount), Function() end).
+
+spawn_worker(Fount, Function, Args)
+  when is_pid  (Fount), is_function(Function, 0), is_list(Args);
+       is_atom (Fount), is_function(Function, 0), is_list(Args) ->
+    spawn(fun() -> link(Fount), apply(Function, Args) end);
+spawn_worker(Fount, Module, Fun)
+  when is_pid  (Fount), is_atom(Module), is_atom(Fun);
+       is_atom (Fount), is_atom(Module), is_atom(Fun) ->
+    spawn(fun() -> link(Fount), Module:Fun() end).
+
+spawn_worker(Fount, Module, Fun, Args)
+  when is_pid  (Fount), is_atom(Module), is_atom(Fun), is_list(Args);
+       is_atom (Fount), is_atom(Module), is_atom(Fun), is_list(Args) ->
+    spawn(fun() -> link(Fount), apply(Module, Fun, Args) end).
+
+
 -type state_name()   :: 'EMPTY' | 'FULL' | 'LOW'.
 -type microseconds() :: non_neg_integer().
 -type notifier()     :: undefined | pid().
@@ -93,16 +136,6 @@
           notifier                    :: notifier()           % Optional gen_event notifier pid
         }).
 -type cf_state() :: #cf_state{}.
-
-%%% cxy_fount behaviour callbacks
--type fount_ref() :: pid() | atom().  % gen_fsm reference
--export_type([fount_ref/0]).
-
-%%% Use macro START_FOUNT_PID or START_FOUND_PID_WITH_ARGS to create a pid.
-%%% These macros automatically link the new pid to the fount process.
--callback start_pid (fount_ref())     -> pid()  | {error, Reason::any()}.
--callback send_msg  (Worker, tuple()) -> Worker | {error, Reason::any()}
-                                             when Worker :: pid().
 
 default_num_slabs()     ->   5.
 default_slab_size()     ->  20.

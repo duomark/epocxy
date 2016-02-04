@@ -125,7 +125,7 @@ start_fount(Behaviour, Slab_Size, Depth) ->
     Fount.
 
 verify_reservoir_is_full(Fount) ->
-    verify_reservoir_is_full(Fount, 1000, 1).
+    verify_reservoir_is_full(Fount, 2000, 1).
 
 verify_reservoir_is_full(Fount, Max_Tries, Count) ->
     erlang:yield(),

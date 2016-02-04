@@ -21,7 +21,9 @@
 
 -include("cxy_fount.hrl").
 
-?START_FOUNT_PID(Fount, wait_for_hello).
+start_pid(Fount) ->
+    cxy_fount:spawn_worker(Fount, fun wait_for_hello/0).
+    
 send_msg(Worker, Msg) ->
     spawn_link(fun() -> say_to(Worker, Msg) end),
     Worker.
