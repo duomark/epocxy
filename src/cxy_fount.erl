@@ -98,8 +98,10 @@
 -type fount_ref() :: pid() | atom().  % gen_fsm reference
 -export_type([fount_ref/0]).
 
--callback start_pid (fount_ref())     ->   pid()  | {error, Reason::any()}.
--callback send_msg  (Worker, tuple()) -> [Worker] | {error, Reason::any()} | []
+%%% Use macro START_FOUNT_PID or START_FOUND_PID_WITH_ARGS to create a pid.
+%%% These macros automatically link the new pid to the fount process.
+-callback start_pid (fount_ref())     -> pid()  | {error, Reason::any()}.
+-callback send_msg  (Worker, tuple()) -> Worker | {error, Reason::any()}
                                              when Worker :: pid().
 
 default_num_slabs()     ->   5.
@@ -301,25 +303,21 @@ allocate_slab(Parent_Pid,  Module, Start_Time, Num_To_Spawn, Slab)
 
 %%% When empty or low, add newly allocated slab of pids...
 'EMPTY' ({slab,  Pids,  Start_Time,  Elapsed}, #cf_state{} = State) -> add_slab(State, Pids, Start_Time, Elapsed);
-'EMPTY' (_Event,                               #cf_state{} = State) -> {next_state, 'EMPTY',  State}.
+'EMPTY' (Event,                                #cf_state{} = State) -> next_state({ignored, Event}, 'EMPTY', State).
 
 'LOW'   ({slab,  Pids,  Start_Time,  Elapsed}, #cf_state{} = State) -> add_slab(State, Pids, Start_Time, Elapsed);
-'LOW'   (_Event,                               #cf_state{} = State) -> {next_state, 'LOW',    State}.
+'LOW'   (Event,                                #cf_state{} = State) -> next_state({ignored, Event}, 'LOW',   State).
 
 %%% When full, we shouldn't receive a request to add more.
-'FULL'  ({slab, _Pids, _Start_Time, _Elapsed}, #cf_state{} = State) -> {stop,       overfull, State};
-'FULL'  (_Event,                               #cf_state{} = State) -> {next_state, 'FULL',   State}.
+'FULL'  ({slab, _Pids, _Start_Time, _Elapsed}, #cf_state{} = State) -> {stop, overfull, State};
+'FULL'  (Event,                                #cf_state{} = State) -> next_state({ignored, Event}, 'FULL',  State).
 
 
 %%% Then to the reservoir of untapped slabs.
 add_slab(#cf_state{notifier=Notifier, slab_size=Slab_Size} = State, Pids, Start_Time, Elapsed) ->
 
-    %% Notify the gen_event if it is waiting for slab events...
-    Total_Time = timer:now_diff(os:timestamp(), Start_Time),
-    [gen_event:notify(Notifier, {slab_added, Slab_Size, Start_Time, Elapsed, Total_Time})
-     || is_pid(State#cf_state.notifier)],
-
     %% Slabs are added to the fount first if empty, otherwise to the reservoir.
+    Total_Time = timer:now_diff(os:timestamp(), Start_Time),
     Timed_Slab = #timed_slab{slab=Pids, start=Start_Time, spawn_time=Elapsed, total_time=Total_Time},
     #cf_state{fount_count=Fount_Count, reservoir=Slabs, depth=Depth, num_slabs=Num_Slabs} = State,
     New_State = case Fount_Count of
@@ -334,7 +332,7 @@ add_slab(#cf_state{notifier=Notifier, slab_size=Slab_Size} = State, Pids, Start_
                          N when N > New_Num_Slabs -> 'LOW'
                          %% Crash if New_Num_Slabs >= Depth, too many slabs created
                      end,
-    {next_state, New_State_Name, New_State}.
+    next_state({slab_added, Slab_Size, Start_Time, Elapsed, Total_Time}, New_State_Name, New_State).
 
 
 %%%------------------------------------------------------------------------------
@@ -348,19 +346,19 @@ add_slab(#cf_state{notifier=Notifier, slab_size=Slab_Size} = State, Pids, Start_
 -spec 'LOW'   (synch_request(), {pid(), reference()}, cf_state()) -> {reply, [pid()], 'EMPTY' | 'LOW'         , cf_state()}.
 
 %%% 'EMPTY' state is only exited when a slab of pids is delivered...
-'EMPTY' ({task_pids, _Msgs}, _From, #cf_state{} = State) -> {reply,      [], 'EMPTY', State};
-'EMPTY' ({get_pids,  _Num},  _From, #cf_state{} = State) -> {reply,      [], 'EMPTY', State};
-'EMPTY' (_Event,             _From, #cf_state{} = State) -> {reply, ignored, 'EMPTY', State}.
+'EMPTY' ({task_pids, _Msgs} = Req, _From, #cf_state{} = State) -> reply({empty_reply, Req}, 'EMPTY', State);
+'EMPTY' ({get_pids,  _Num}  = Req, _From, #cf_state{} = State) -> reply({empty_reply, Req}, 'EMPTY', State);
+'EMPTY' (Event,                    _From, #cf_state{} = State) -> reply({ignored,   Event}, 'EMPTY', State).
 
 %%% 'FULL' state is exited when the fount becomes empty and one more pid is needed...
-'FULL'  ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs, 'FULL',  State);
-'FULL'  ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,  'FULL',  State);
-'FULL'  (_Event,             _From, #cf_state{} = State) -> {reply, ignored, 'FULL',  State}.
+'FULL'  ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs,        'FULL',  State);
+'FULL'  ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,         'FULL',  State);
+'FULL'  (Event,              _From, #cf_state{} = State) -> reply({ignored, Event}, 'FULL',  State).
 
 %%% 'LOW' state is exited when there are no reserve slabs or reserve is full.
-'LOW'   ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs, 'LOW',   State);
-'LOW'   ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,  'LOW',   State);
-'LOW'   (_Event,             _From, #cf_state{} = State) -> {reply, ignored, 'LOW',   State}.
+'LOW'   ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs,        'LOW',   State);
+'LOW'   ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,         'LOW',   State);
+'LOW'   (Event,              _From, #cf_state{} = State) -> reply({ignored, Event}, 'LOW',   State).
 
 
 %%%------------------------------------------------------------------------------
@@ -373,19 +371,33 @@ task_pids(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
   when is_list(Msgs) ->
     %% Well, ok, twice for the message list...
     Num_Pids = length(Msgs),
+
+    %% Notification of empty reply has already been sent if needed.
     Reply = {reply, Workers, _New_State_Name, _New_State}
         = get_pids(Num_Pids, State_Fn, State),
+
+    %% Don't message workers if we didn't get any back.
     _ = [all_sent = msg_workers(Module, Workers, Msgs) || Workers =/= []],
     Reply.
 
 msg_workers(_Module,                 [],           []) -> all_sent;
 msg_workers( Module, [Worker | Workers], [Msg | Msgs]) ->
-    send_msg    (Module, Worker,  Msg),
-    msg_workers (Module, Workers, Msgs).
+    _ = send_msg (Module, Worker,  Msg),
+    msg_workers  (Module, Workers, Msgs).
 
 send_msg(Module, Pid, Msg) ->
-    try   Module:send_msg(Pid, Msg), Pid
-    catch Class:Type -> {error, {Module, send_msg, Class, Type, Msg}}
+    try   Pid = Module:send_msg(Pid, Msg)
+    catch
+        %% Hopefully just an error return instead of [Pid], but this could
+        %% be a badmatch that occurred inside Module:send_msg/2...
+        error:{badmatch, Value} ->
+            error_logger:error_msg("~p:send_msg(~p, ~p) reported ~9999p~n",
+                                   [Module, Pid, Msg, {Value, erlang:get_stacktrace()}]);
+        %% All other errors.
+        Class:Type ->
+            Error_Msg = {{error, {Module, send_msg, Class, Type, Msg}}, erlang:get_stacktrace()},
+            error_logger:error_msg("~p:send_msg(~p, ~p) crashed with ~9999p~n",
+                                   [Module, Pid, Msg, Error_Msg])
     end.
 
 
@@ -395,7 +407,7 @@ send_msg(Module, Pid, Msg) ->
 
 %% 0 Pids wanted...
 get_pids (0,  State_Fn, #cf_state{} = State) ->
-    {reply, [], State_Fn, State};
+    reply({empty_reply, {get_pids, 0}}, State_Fn, State);
  
 %% 1 Pid wanted...
 get_pids (1, _State_Fn, #cf_state{fount=#timed_slab{slab=[Pid]}} = State) ->
@@ -426,7 +438,7 @@ get_pids (Num_Pids,  State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_co
 get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= Slab_Size, Num_Slabs > 0 ->
     #cf_state{behaviour=Mod, reservoir=[#timed_slab{slab=Slab} | More_Slabs]} = State,
-    replace_slabs(Mod, 1, Slab_Size),
+    done = replace_slabs(Mod, 1, Slab_Size),
     reply(Slab, 'LOW', State#cf_state{reservoir=More_Slabs, num_slabs=Num_Slabs-1});
 
 %%% More than 1 pid wanted, less than Slab_Size, grab the front of top slab, add balance to fount...
@@ -434,7 +446,7 @@ get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slab
   when Num_Pids < Slab_Size, Num_Slabs > 0 ->
     #cf_state{behaviour=Mod, fount=#timed_slab{slab=Fount}, fount_count=FC,
               reservoir=[#timed_slab{slab=Slab} = Reservoir_Slab | More_Slabs]} = State,
-    replace_slabs(Mod, 1, Slab_Size),
+    done = replace_slabs(Mod, 1, Slab_Size),
     {Pids, Remaining} = lists:split(Num_Pids, Slab),
     Partial_Slab_Size = Slab_Size - Num_Pids,
     Fount_Count = FC + Partial_Slab_Size,
@@ -452,7 +464,7 @@ get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slab
 %%% More than 1 Pid wanted, but not enough available...
 get_pids (Num_Pids,  State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids > (Num_Slabs * Slab_Size) + FC ->
-    {reply, [], State_Fn, State};
+    reply({empty_reply, {get_pids, Num_Pids}}, State_Fn, State);
 
 %%% More than 1 pid wanted, more than Slab_Size, see if there are enough to return...
 get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
@@ -461,19 +473,19 @@ get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, nu
     Slabs_Needed = (Num_Pids - Excess) div Slab_Size,
     #cf_state{behaviour=Mod, fount=Fount_Slab, reservoir=[#timed_slab{slab=First_Slab} | More_Slabs] = All_Slabs} = State,
     #timed_slab{slab=Fount} = Fount_Slab,
-    replace_slabs(Mod, Slabs_Needed, Slab_Size),
+    done = replace_slabs(Mod, Slabs_Needed, Slab_Size),
 
     %% Append the slabs and the excess into a single list...
     Full_Slabs_Left = Num_Slabs - Slabs_Needed,
     {{Pids, Remaining_Fount_Pids}, {Slabs_Requested, Remaining_Slabs}, {New_Num_Slabs, New_Fount_Count}}
         = case FC of
               Excess ->
-                  replace_slabs(Mod, 1, Slab_Size),
+                  done = replace_slabs(Mod, 1, Slab_Size),
                   {{Fount, []}, lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, 0}};
               Enough when Enough > Excess ->
                   {lists:split(Excess, Fount), lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, FC-Excess}};
               _Not_Enough ->
-                  replace_slabs(Mod, 1, Slab_Size),
+                  done = replace_slabs(Mod, 1, Slab_Size),
                   {lists:split(Excess, Fount ++ First_Slab), lists:split(Slabs_Needed, More_Slabs), {Full_Slabs_Left-1, FC+Slab_Size-Excess}}
           end,
     Remaining_Fount = case Remaining_Fount_Pids of
@@ -483,33 +495,57 @@ get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, nu
     Pids_Requested = lists:append([Pids | [S || #timed_slab{slab=S} <- Slabs_Requested]]),
     New_State_Fn = case Remaining_Fount =:= [] andalso Remaining_Slabs =:= [] of true -> 'EMPTY'; false -> 'LOW' end,
     New_State = State#cf_state{fount=Remaining_Fount, fount_count=New_Fount_Count, reservoir=Remaining_Slabs, num_slabs=New_Num_Slabs},
-    reply(Pids_Requested, New_State_Fn, New_State);
+    case Pids of
+        []   -> reply({empty_reply, {get_pids, Num_Pids}}, New_State_Fn, New_State);
+        Pids -> reply(Pids_Requested, New_State_Fn, New_State)
+    end;
 
 %%% All the pids wanted, change to the EMPTY state.
-get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
+get_pids (Num_Pids, _State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= (Num_Slabs * Slab_Size) + FC ->
-    #cf_state{behaviour=Mod, fount=#timed_slab{slab=Fount}, reservoir=Reservoir} = State, 
-    replace_slabs(Mod, Num_Slabs + 1, Slab_Size),
+    #cf_state{behaviour=Mod, reservoir=Reservoir} = State, 
+    done = replace_slabs(Mod, Num_Slabs + 1, Slab_Size),
     Pids_Requested = lists:append([Fount | [S || #timed_slab{slab=S} <- Reservoir]]),
-    reply(Pids_Requested, 'EMPTY', State#cf_state{fount=[], reservoir=[], fount_count=0, num_slabs=0}).
-
-
-%%% Unlink the reply pids so they can no longer take down the cxy_fount.
-reply(Pids, New_State_Fn, New_State_Record) ->
-    _ = [unlink(Pid) || Pid <- Pids],
-    {reply, Pids, New_State_Fn, New_State_Record}.
+    reply(Pids_Requested, 'EMPTY', State#cf_state{fount=#timed_slab{}, reservoir=[], fount_count=0, num_slabs=0}).
 
 replace_slabs(Mod, Num_Slabs, Slab_Size) ->
     Slab_Allocator_Args = [self(), Mod, os:timestamp(), Slab_Size, []],
     done = spawn_link_allocators(Num_Slabs, Slab_Allocator_Args).
 
 replace_slab_then_return_fount(Pids, #cf_state{behaviour=Mod, slab_size=Slab_Size, num_slabs=Num_Slabs} = State) ->
-    replace_slabs(Mod, 1, Slab_Size),
+    done = replace_slabs(Mod, 1, Slab_Size),
     New_State = State#cf_state{fount=#timed_slab{slab=[]}, fount_count=0},
     case Num_Slabs of
         0 -> reply(Pids, 'EMPTY', New_State);
         _ -> reply(Pids, 'LOW',   New_State)
     end.
+
+
+%%% Notify when unexpected asynch events happen...
+next_state({ignored, Event}, New_State_Fn, #cf_state{notifier=Notifier} = New_State_Record) ->
+    _ = [gen_event:notify(Notifier, {?MODULE, self(), {bad_asynch_msg, Event}}) || Notifier =/= undefined],
+    {next_state, New_State_Fn, New_State_Record};
+%%% Notify when a slab is added to the internal fount state.
+next_state({slab_added, _,_,_,_} = Add_Slab_Msg, New_State_Fn, #cf_state{notifier=Notifier} = New_State_Record) ->
+    _ = [gen_event:notify(Notifier, {?MODULE, self(), Add_Slab_Msg}) || Notifier =/= undefined],
+    {next_state, New_State_Fn, New_State_Record}.
+
+
+%%% Notify when unexpected synch events happen...
+reply({ignored, Cmd}, New_State_Fn, #cf_state{notifier=Notifier} = New_State_Record) ->
+    _ = [gen_event:notify(Notifier, {?MODULE, self(), {bad_synch_msg, Cmd}}) || Notifier =/= undefined],
+    {reply, ignored, New_State_Fn, New_State_Record};
+
+%%% Notify when request for pids cannot be serviced...
+reply({empty_reply, _Request} = Empty, New_State_Fn, #cf_state{notifier=Notifier} = New_State_Record) ->
+    _ = [gen_event:notify(Notifier, {?MODULE, self(), Empty}) || Notifier =/= undefined],
+    {reply, [], New_State_Fn, New_State_Record};
+
+%%% Successful replies don't require any notifications.
+%%% Unlink the reply pids so they can no longer take down the cxy_fount.
+reply(Pids, New_State_Fn, #cf_state{} = New_State_Record) ->
+    _ = [unlink(Pid) || Pid <- Pids],
+    {reply, Pids, New_State_Fn, New_State_Record}.
 
 
 %%%------------------------------------------------------------------------------
@@ -623,7 +659,7 @@ stop_worker(Pid) -> unlink(Pid), exit(Pid, kill).
 -spec handle_info  (any(), State_Name, State)
         -> {next_state, State_Name, State} when State_Name :: state_name(), State :: cf_state().
 -spec code_change  (any(), State_Name, State, any())
-        -> {next_state, State_Name, State} when State_Name :: state_name(), State :: cf_state().
+        -> {ok,         State_Name, State} when State_Name :: state_name(), State :: cf_state().
 
 handle_event (_Event,   State_Name,  State) -> {next_state, State_Name, State}.
 handle_info  (_Info,    State_Name,  State) -> {next_state, State_Name, State}.

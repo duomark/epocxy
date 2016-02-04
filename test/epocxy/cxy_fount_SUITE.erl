@@ -275,7 +275,6 @@ verify_pids(Fount, Num_Pids, Slab_Size, Depth, Task_Or_Get) ->
                     'FULL' = verify_reservoir_is_full(Fount)
             end;
         Num_Pids ->
-            Num_Pids = length(Pids),
             _ = unlink_workers(Pids, Task_Or_Get),
             'FULL' = verify_reservoir_is_full(Fount)
     end.

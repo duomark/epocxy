@@ -22,7 +22,9 @@
 -include("cxy_fount.hrl").
 
 ?START_FOUNT_PID(Fount, wait_for_hello).
-send_msg(Worker, Msg) -> spawn_link(fun() -> say_to(Worker, Msg) end).
+send_msg(Worker, Msg) ->
+    spawn_link(fun() -> say_to(Worker, Msg) end),
+    Worker.
 
 %% Idle workers may wait a while before being used in a test.
 wait_for_hello() ->
