@@ -45,12 +45,14 @@
 -export([start_link/1, start_link/2,    % Fount with no name
          start_link/3, start_link/4,    % Fount with name
          get_pid/1,    get_pids/2,      % Get 1 pid or list of pids
+         get_pid/2,    get_pids/3,      % Get 1 pid or list of pids with retry
          task_pid/2,   task_pids/2,     % Send message to pid
+         task_pid/3,   task_pids/3,     % Send message to pid with retry
          get_total_rate_per_slab/1,     % Report the round trip allocator slab rate
          get_total_rate_per_process/1,  % Report the round trip allocator process rate
          get_spawn_rate_per_slab/1,     % Report the spawn allocator slab rate
          get_spawn_rate_per_process/1,  % Report the spawn allocator process rate
-         get_status/1,                  % Get status of Fount,
+         get_status/1,                  % Get status of Fount
          set_notifier/2                 % Set / remove gen_event notifier
         ]).
 
@@ -88,24 +90,26 @@
 %%% Support functions for spawning workers in a behaviour module.
 -export([spawn_worker/2, spawn_worker/3, spawn_worker/4]).
 
+-define(SPAWN(__Fount, __Expr), spawn(fun() -> link(__Fount), __Expr end)).
+                                      
 spawn_worker(Fount, Function)
   when is_pid  (Fount), is_function(Function, 0);
        is_atom (Fount), is_function(Function, 0) ->
-    spawn(fun() -> link(Fount), Function() end).
+    ?SPAWN(Fount, Function()).
 
 spawn_worker(Fount, Function, Args)
   when is_pid  (Fount), is_function(Function, 0), is_list(Args);
        is_atom (Fount), is_function(Function, 0), is_list(Args) ->
-    spawn(fun() -> link(Fount), apply(Function, Args) end);
+    ?SPAWN(Fount, apply(Function, Args));
 spawn_worker(Fount, Module, Fun)
   when is_pid  (Fount), is_atom(Module), is_atom(Fun);
        is_atom (Fount), is_atom(Module), is_atom(Fun) ->
-    spawn(fun() -> link(Fount), Module:Fun() end).
+    ?SPAWN(Fount, Module:Fun()).
 
 spawn_worker(Fount, Module, Fun, Args)
   when is_pid  (Fount), is_atom(Module), is_atom(Fun), is_list(Args);
        is_atom (Fount), is_atom(Module), is_atom(Fun), is_list(Args) ->
-    spawn(fun() -> link(Fount), apply(Module, Fun, Args) end).
+    ?SPAWN(Fount, apply(Module, Fun, Args)).
 
 
 -type state_name()   :: 'EMPTY' | 'FULL' | 'LOW'.
@@ -175,6 +179,7 @@ start_link(Fount_Name, Fount_Behaviour, Slab_Size, Reservoir_Depth)
     gen_fsm:start_link({local, Fount_Name}, ?MODULE,
                        {Fount_Behaviour, Slab_Size, Reservoir_Depth}, []).
 
+
 %%% Set or clear a gen_event pid() for notifications of slab replacement.
 -spec set_notifier (fount_ref(), undefined | pid()) -> ok.
 -spec stop         (fount_ref()) -> ok.
@@ -187,24 +192,110 @@ stop(Fount) ->
     gen_fsm:sync_send_all_state_event(Fount, {stop}).
 
 
--spec get_pid  (fount_ref())                -> [pid()] | {error, any()}.
--spec get_pids (fount_ref(), pos_integer()) -> [pid()] | {error, any()}.
+-type milliseconds() :: non_neg_integer().
+-type pid_reply()    :: [pid()] | {error, any()}.
+-type option()       :: {retry_times,    pos_integer()}
+                      | {retry_backoff, [milliseconds(), ...]}.
 
+-spec get_pid  (fount_ref())                            -> pid_reply().
+-spec get_pid  (fount_ref(), [option()])                -> pid_reply().
+-spec get_pids (fount_ref(), pos_integer())             -> pid_reply().
+-spec get_pids (fount_ref(), pos_integer(), [option()]) -> pid_reply().
+
+%%% These macros make the code a bit cryptic, but the redundancy was distracting
+%%% and if you take for granted they work, things are more readable.
+-define(RETRY(__Fount, __Fsm_Msg, __Recurse_Fn, __Retry_Option, __Retry_Reduction),
+        case gen_fsm:sync_send_event(__Fount, __Fsm_Msg, default_reply_timeout()) of
+            []     -> receive after 5 -> resume end,  % Give a chance for spawns
+                      __Recurse_Fn(__Fount, [{__Retry_Option, __Retry_Reduction}]);
+            Result -> Result
+        end).
+
+-define(RETRY(__Fount, __Extra, __Fsm_Msg, __Recurse_Fn, __Retry_Option, __Retry_Reduction),
+        case gen_fsm:sync_send_event(__Fount, __Fsm_Msg, default_reply_timeout()) of
+            []     -> receive after 5 -> resume end,  % Give a chance for spawns
+                      __Recurse_Fn(__Fount, __Extra, [{__Retry_Option, __Retry_Reduction}]);
+            Result -> Result
+        end).
+
+%%% Immediate reply or failure
 get_pid(Fount) ->
     gen_fsm:sync_send_event(Fount, {get_pids, 1}, default_reply_timeout()).
 
-get_pids(Fount, Num) when is_integer(Num), Num >= 0 ->
+%%% Retry a number of times, or with a list of backoff milliseconds.
+get_pid(_Fount, [{retry_times,     0}]) -> [];
+get_pid( Fount, [{retry_times, Times}])
+  when is_integer(Times), Times > 0 ->
+    ?RETRY(Fount, {get_pids, 1}, get_pid, retry_times, Times-1);
+
+get_pid(_Fount, [{retry_backoff,           []}]) -> [];
+get_pid( Fount, [{retry_backoff, [D | Delays]}])
+  when is_integer(D), D >= 0 ->
+    ?RETRY(Fount, {get_pids, 1}, get_pid, retry_backoff, Delays).
+    
+
+%%% Immediate reply or failure.
+get_pids(Fount, Num)
+  when is_integer(Num), Num >= 0 ->
     gen_fsm:sync_send_event(Fount, {get_pids, Num}, default_reply_timeout()).
 
+%%% Retry a number of times, or with a list of backoff milliseconds.
+get_pids(_Fount, Num, [{retry_times,     0}])
+  when is_integer(Num), Num >= 0 ->
+    [];
+get_pids( Fount, Num, [{retry_times, Times}])
+  when is_integer(Num),   Num   >= 0,
+       is_integer(Times), Times >  0 ->
+    ?RETRY(Fount, Num, {get_pids, Num}, get_pids, retry_times, Times-1);
 
--spec task_pid  (fount_ref(),  any())  -> [pid()] | {error, any()}.
--spec task_pids (fount_ref(), [any()]) -> [pid()] | {error, any()}.
+get_pids(_Fount, Num, [{retry_backoff,           []}])
+  when is_integer(Num), Num >= 0 ->
+    [];
+get_pids( Fount, Num, [{retry_backoff, [D | Delays]}])
+  when is_integer(Num),   Num   >= 0,
+       is_integer(D),     D     >= 0 ->
+    ?RETRY(Fount, Num, {get_pids, Num}, get_pids, retry_backoff, Delays).
 
+
+-spec task_pid  (fount_ref(),  any())              -> pid_reply().
+-spec task_pid  (fount_ref(),  any(), [option()])  -> pid_reply().
+-spec task_pids (fount_ref(), [any()])             -> pid_reply().
+-spec task_pids (fount_ref(), [any()], [option()]) -> pid_reply().
+
+%%% Immediate reply or failure
 task_pid(Fount, Msg) ->
     gen_fsm:sync_send_event(Fount, {task_pids, [Msg]}, default_reply_timeout()).
 
+%%% Retry a number of times, or with a list of backoff milliseconds.
+task_pid(_Fount, _Msg, [{retry_times,     0}]) -> [];
+task_pid( Fount,  Msg, [{retry_times, Times}])
+  when is_integer(Times), Times > 0 ->
+    ?RETRY(Fount, Msg, {task_pids, [Msg]}, task_pid, retry_times, Times-1);
+
+task_pid(_Fount, _Msg, [{retry_backoff,           []}]) -> [];
+task_pid( Fount,  Msg, [{retry_backoff, [D | Delays]}])
+  when is_integer(D), D >= 0 ->
+    ?RETRY(Fount, Msg, {task_pids, [Msg]}, task_pid, retry_backoff, Delays).
+
+
+%%% Immediate reply or failure.
 task_pids(Fount, Msgs) when is_list(Msgs) ->
-    gen_fsm:sync_send_event(Fount, {task_pids,  Msgs}, default_reply_timeout()).
+    gen_fsm:sync_send_event(Fount, {task_pids, Msgs}, default_reply_timeout()).
+
+%%% Retry a number of times, or with a list of backoff milliseconds.
+task_pids(_Fount, _Msgs, [{retry_times,     0}])
+  when is_list(_Msgs) ->
+    [];
+task_pids( Fount,  Msgs, [{retry_times, Times}])
+  when is_list(Msgs), is_integer(Times), Times > 0 ->
+    ?RETRY(Fount, Msgs, {task_pids, Msgs}, task_pids, retry_times, Times-1);
+
+task_pids(_Fount, _Msgs, [{retry_backoff,           []}])
+  when is_list(_Msgs) ->
+    [];
+task_pids( Fount,  Msgs, [{retry_backoff, [D | Delays]}])
+  when is_list(Msgs), is_integer(D), D >= 0 ->
+    ?RETRY(Fount, Msgs, {task_pids, Msgs}, task_pids, retry_backoff, Delays).
 
 
 -type status_attr() :: {current_state, atom()}              % FSM State function name
@@ -330,7 +421,7 @@ allocate_slab(Parent_Pid,  Module, Start_Time, Num_To_Spawn, Slab)
 
 
 %%% Then to the reservoir of untapped slabs.
-add_slab(#cf_state{notifier=Notifier, slab_size=Slab_Size} = State, Pids, Start_Time, Elapsed) ->
+add_slab(#cf_state{slab_size=Slab_Size} = State, Pids, Start_Time, Elapsed) ->
 
     %% Slabs are added to the fount first if empty, otherwise to the reservoir.
     Total_Time = timer:now_diff(os:timestamp(), Start_Time),
@@ -367,30 +458,30 @@ add_slab(#cf_state{notifier=Notifier, slab_size=Slab_Size} = State, Pids, Start_
 'EMPTY' (Event,                    _From, #cf_state{} = State) -> reply({ignored,   Event}, 'EMPTY', State).
 
 %%% 'FULL' state is exited when the fount becomes empty and one more pid is needed...
-'FULL'  ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs,        'FULL',  State);
-'FULL'  ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,         'FULL',  State);
-'FULL'  (Event,              _From, #cf_state{} = State) -> reply({ignored, Event}, 'FULL',  State).
+'FULL'  ({task_pids, Msgs},  _From, #cf_state{} = State) -> reply_task (Msgs,        'FULL',  State);
+'FULL'  ({get_pids,  Num},   _From, #cf_state{} = State) -> reply_pids (Num,         'FULL',  State);
+'FULL'  (Event,              _From, #cf_state{} = State) -> reply({ignored, Event},  'FULL',  State).
 
 %%% 'LOW' state is exited when there are no reserve slabs or reserve is full.
-'LOW'   ({task_pids, Msgs},  _From, #cf_state{} = State) -> task_pids (Msgs,        'LOW',   State);
-'LOW'   ({get_pids,  Num},   _From, #cf_state{} = State) -> get_pids  (Num,         'LOW',   State);
-'LOW'   (Event,              _From, #cf_state{} = State) -> reply({ignored, Event}, 'LOW',   State).
+'LOW'   ({task_pids, Msgs},  _From, #cf_state{} = State) -> reply_task (Msgs,        'LOW',   State);
+'LOW'   ({get_pids,  Num},   _From, #cf_state{} = State) -> reply_pids (Num,         'LOW',   State);
+'LOW'   (Event,              _From, #cf_state{} = State) -> reply({ignored, Event},  'LOW',   State).
 
 
 %%%------------------------------------------------------------------------------
-%%% task_pids uses get_pids, then sends messages to them
+%%% reply_task uses reply_pids, then sends messages to them
 %%%------------------------------------------------------------------------------
 
 %%% Get as many workers as there are messages to send, then give a message
 %%% to each one without traversing the worker or message list more than once.
-task_pids(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
+reply_task(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
   when is_list(Msgs) ->
     %% Well, ok, twice for the message list...
     Num_Pids = length(Msgs),
 
     %% Notification of empty reply has already been sent if needed.
     Reply = {reply, Workers, _New_State_Name, _New_State}
-        = get_pids(Num_Pids, State_Fn, State),
+        = reply_pids(Num_Pids, State_Fn, State),
 
     %% Don't message workers if we didn't get any back.
     _ = [all_sent = msg_workers(Module, Workers, Msgs) || Workers =/= []],
@@ -418,20 +509,20 @@ send_msg(Module, Pid, Msg) ->
 
 
 %%%------------------------------------------------------------------------------
-%%% get_pids responds with the desired worker list of pid()
+%%% reply_pids responds with the desired worker list of pid()
 %%%------------------------------------------------------------------------------
 
 %% 0 Pids wanted...
-get_pids (0,  State_Fn, #cf_state{} = State) ->
+reply_pids (0,  State_Fn, #cf_state{} = State) ->
     reply({empty_reply, {get_pids, 0}}, State_Fn, State);
  
 %% 1 Pid wanted...
-get_pids (1, _State_Fn, #cf_state{fount=#timed_slab{slab=[Pid]}} = State) ->
+reply_pids (1, _State_Fn, #cf_state{fount=#timed_slab{slab=[Pid]}} = State) ->
     replace_slab_then_return_fount([Pid], State);
-get_pids (1,  State_Fn, #cf_state{fount=#timed_slab{slab=[Pid | More]}, fount_count=FC} = State) ->
+reply_pids (1,  State_Fn, #cf_state{fount=#timed_slab{slab=[Pid | More]}, fount_count=FC} = State) ->
     New_State = State#cf_state{fount=#timed_slab{slab=More}, fount_count=FC-1},
     reply([Pid], State_Fn, New_State);
-get_pids (1, _State_Fn, #cf_state{fount=#timed_slab{slab=[]}, num_slabs=Num_Slabs, slab_size=Slab_Size} = State) ->
+reply_pids (1, _State_Fn, #cf_state{fount=#timed_slab{slab=[]}, num_slabs=Num_Slabs, slab_size=Slab_Size} = State) ->
     [#timed_slab{slab=[Pid | Rest]} = Slab | More_Slabs] = State#cf_state.reservoir,
     New_Fount = Slab#timed_slab{slab=Rest},
     New_State = State#cf_state{fount=New_Fount, reservoir=More_Slabs, fount_count=Slab_Size-1, num_slabs=Num_Slabs-1},
@@ -439,11 +530,11 @@ get_pids (1, _State_Fn, #cf_state{fount=#timed_slab{slab=[]}, num_slabs=Num_Slab
 
 %%% More than 1 pid wanted, can be supplied by Fount...
 %%% (Fount might be greater than slab_size, so this clause comes before slab checks)
-get_pids (Num_Pids, _State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_count=FC} = State)
+reply_pids (Num_Pids, _State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_count=FC} = State)
   when Num_Pids =:= FC ->
     replace_slab_then_return_fount(Fount, State);
 
-get_pids (Num_Pids,  State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_count=FC} = State)
+reply_pids (Num_Pids,  State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_count=FC} = State)
   when Num_Pids < FC ->
     Fount_Count = FC - Num_Pids,
     {Pids, Remaining} = lists:split(Num_Pids, Fount),
@@ -451,14 +542,14 @@ get_pids (Num_Pids,  State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_co
     reply(Pids, State_Fn, State#cf_state{fount=New_Fount, fount_count=Fount_Count});
 
 %%% More than 1 pid wanted, matches Slab_Size, grab the top of the reservoir if it's not empty...
-get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
+reply_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= Slab_Size, Num_Slabs > 0 ->
     #cf_state{behaviour=Mod, reservoir=[#timed_slab{slab=Slab} | More_Slabs]} = State,
     done = replace_slabs(Mod, 1, Slab_Size),
     reply(Slab, 'LOW', State#cf_state{reservoir=More_Slabs, num_slabs=Num_Slabs-1});
 
 %%% More than 1 pid wanted, less than Slab_Size, grab the front of top slab, add balance to fount...
-get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
+reply_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids < Slab_Size, Num_Slabs > 0 ->
     #cf_state{behaviour=Mod, fount=#timed_slab{slab=Fount}, fount_count=FC,
               reservoir=[#timed_slab{slab=Slab} = Reservoir_Slab | More_Slabs]} = State,
@@ -478,12 +569,12 @@ get_pids (Num_Pids, _State_Fn, #cf_state{slab_size=Slab_Size, num_slabs=Num_Slab
     reply(Pids, 'LOW', New_State);
 
 %%% More than 1 Pid wanted, but not enough available...
-get_pids (Num_Pids,  State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
+reply_pids (Num_Pids,  State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids > (Num_Slabs * Slab_Size) + FC ->
     reply({empty_reply, {get_pids, Num_Pids}}, State_Fn, State);
 
 %%% More than 1 pid wanted, more than Slab_Size, see if there are enough to return...
-get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
+reply_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids > Slab_Size, Num_Pids < (Num_Slabs * Slab_Size) + FC -> 
     Excess       = Num_Pids rem Slab_Size,
     Slabs_Needed = (Num_Pids - Excess) div Slab_Size,
@@ -517,7 +608,7 @@ get_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, nu
     end;
 
 %%% All the pids wanted, change to the EMPTY state.
-get_pids (Num_Pids, _State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
+reply_pids (Num_Pids, _State_Fn, #cf_state{fount=#timed_slab{slab=Fount}, fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
   when Num_Pids =:= (Num_Slabs * Slab_Size) + FC ->
     #cf_state{behaviour=Mod, reservoir=Reservoir} = State, 
     done = replace_slabs(Mod, Num_Slabs + 1, Slab_Size),
