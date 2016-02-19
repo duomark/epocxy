@@ -204,34 +204,46 @@ stop(Fount) ->
 
 %%% These macros make the code a bit cryptic, but the redundancy was distracting
 %%% and if you take for granted they work, things are more readable.
--define(RETRY(__Fount, __Fsm_Msg, __Recurse_Fn, __Retry_Option, __Retry_Reduction),
+-define(RETRY(__Fount, __Fsm_Msg, __Recurse_Fn, __Delay, __Retry_Option, __Retry_Reduction),
         case gen_fsm:sync_send_event(__Fount, __Fsm_Msg, default_reply_timeout()) of
-            []     -> receive after 5 -> resume end,  % Give a chance for spawns
+            []     -> receive after __Delay -> resume end,  % Give a chance for spawns
                       __Recurse_Fn(__Fount, [{__Retry_Option, __Retry_Reduction}]);
             Result -> Result
         end).
 
--define(RETRY(__Fount, __Extra, __Fsm_Msg, __Recurse_Fn, __Retry_Option, __Retry_Reduction),
+-define(RETRY(__Fount, __Extra, __Fsm_Msg, __Recurse_Fn, __Delay, __Retry_Option, __Retry_Reduction),
         case gen_fsm:sync_send_event(__Fount, __Fsm_Msg, default_reply_timeout()) of
-            []     -> receive after 5 -> resume end,  % Give a chance for spawns
+            []     -> receive after __Delay -> resume end,  % Give a chance for spawns
                       __Recurse_Fn(__Fount, __Extra, [{__Retry_Option, __Retry_Reduction}]);
             Result -> Result
         end).
+
 
 %%% Immediate reply or failure
 get_pid(Fount) ->
     gen_fsm:sync_send_event(Fount, {get_pids, 1}, default_reply_timeout()).
 
-%%% Retry a number of times, or with a list of backoff milliseconds.
+%%% Retry a number of times...
 get_pid(_Fount, [{retry_times,     0}]) -> [];
 get_pid( Fount, [{retry_times, Times}])
   when is_integer(Times), Times > 0 ->
-    ?RETRY(Fount, {get_pids, 1}, get_pid, retry_times, Times-1);
+    ?RETRY(Fount, {get_pids, 1}, get_pid, 5, retry_times, Times-1);
 
-get_pid(_Fount, [{retry_backoff,           []}]) -> [];
-get_pid( Fount, [{retry_backoff, [D | Delays]}])
-  when is_integer(D), D >= 0 ->
-    ?RETRY(Fount, {get_pids, 1}, get_pid, retry_backoff, Delays).
+%%% Retry with a list of backoff delays...
+get_pid(_Fount, [{retry_backoff,                           []}]) -> [];
+get_pid( Fount, [{retry_backoff, [This_Delay | Future_Delays]}])
+  when is_integer(This_Delay), This_Delay >= 0 ->
+    ?RETRY(Fount, {get_pids, 1}, get_pid, This_Delay, retry_backoff, Future_Delays);
+
+%%% Retry with a {Delay_Time, Next_Continuation_Fun} mechanism.
+get_pid( Fount, [{retry_fun, Retry_Fun}])
+  when is_function(Retry_Fun, 0) ->
+    case Retry_Fun() of
+        retry_failed -> 
+            ?RETRY(Fount, {get_pids, 1}, get_pid, retry_failed, retry_fun, no_fun);
+        {Delay, Next_Retry_Fun} when is_function(Next_Retry_Fun, 0) ->
+            ?RETRY(Fount, {get_pids, 1}, get_pid, Delay, retry_fun, Next_Retry_Fun)
+    end.
     
 
 %%% Immediate reply or failure.
@@ -239,22 +251,34 @@ get_pids(Fount, Num)
   when is_integer(Num), Num >= 0 ->
     gen_fsm:sync_send_event(Fount, {get_pids, Num}, default_reply_timeout()).
 
-%%% Retry a number of times, or with a list of backoff milliseconds.
+%%% Retry a number of times...
 get_pids(_Fount, Num, [{retry_times,     0}])
   when is_integer(Num), Num >= 0 ->
     [];
 get_pids( Fount, Num, [{retry_times, Times}])
   when is_integer(Num),   Num   >= 0,
        is_integer(Times), Times >  0 ->
-    ?RETRY(Fount, Num, {get_pids, Num}, get_pids, retry_times, Times-1);
+    ?RETRY(Fount, Num, {get_pids, Num}, get_pids, 5, retry_times, Times-1);
 
-get_pids(_Fount, Num, [{retry_backoff,           []}])
+%%% Retry with a list of backoff delays...
+get_pids(_Fount, Num, [{retry_backoff, []}])
   when is_integer(Num), Num >= 0 ->
     [];
-get_pids( Fount, Num, [{retry_backoff, [D | Delays]}])
-  when is_integer(Num),   Num   >= 0,
-       is_integer(D),     D     >= 0 ->
-    ?RETRY(Fount, Num, {get_pids, Num}, get_pids, retry_backoff, Delays).
+get_pids( Fount, Num, [{retry_backoff, [This_Delay | Future_Delays]}])
+  when is_integer(Num),        Num        >= 0,
+       is_integer(This_Delay), This_Delay >= 0 ->
+    ?RETRY(Fount, Num, {get_pids, Num}, get_pids, This_Delay, retry_backoff, Future_Delays);
+
+%%% Retry with a {Delay_Time, Next_Continuation_Fun} mechanism.
+get_pids( Fount, Num, [{retry_fun, Retry_Fun}])
+  when is_integer(Num), Num >= 0,
+       is_function(Retry_Fun, 0) ->
+    case Retry_Fun() of
+        retry_failed ->
+            ?RETRY(Fount, Num, {get_pids, Num}, get_pids, retry_failed, retry_fun, no_fun);
+        {Delay, Next_Retry_Fun} when is_function(Next_Retry_Fun, 0) ->
+            ?RETRY(Fount, Num, {get_pids, Num}, get_pids, Delay, retry_fun, Next_Retry_Fun)
+    end.
 
 
 -spec task_pid  (fount_ref(),  any())              -> pid_reply().
