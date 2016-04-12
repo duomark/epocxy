@@ -51,7 +51,7 @@ start_link(Fount_Behaviour, Init_Args, Notifier)
     supervisor:start_link(?MODULE, {Fount_Behaviour, Init_Args, Notifier});
 start_link(Fount_Name, Fount_Behaviour, Init_Args)
   when is_atom(Fount_Name), is_atom(Fount_Behaviour), is_list(Init_Args) ->
-    supervisor:start_link({local, Fount_Name}, ?MODULE,
+    supervisor:start_link({local, make_sup_name(Fount_Name)}, ?MODULE,
                           {Fount_Name, Fount_Behaviour, Init_Args}).
 
 start_link(Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth)
@@ -63,15 +63,23 @@ start_link(Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth)
 start_link(Fount_Name, Fount_Behaviour, Init_Args, Notifier)
   when is_atom(Fount_Name), is_atom(Fount_Behaviour), is_list(Init_Args),
        is_pid(Notifier) orelse Notifier =:= no_notifier ->
-    supervisor:start_link({local, Fount_Name}, ?MODULE,
+    supervisor:start_link({local, make_sup_name(Fount_Name)}, ?MODULE,
                           {Fount_Name, Fount_Behaviour, Init_Args, Notifier}).
 
+start_link(Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier)
+  when is_atom(Fount_Behaviour),
+       is_list(Init_Args),
+       is_integer(Slab_Size),       Slab_Size > 0,
+       is_integer(Reservoir_Depth), Reservoir_Depth >= 2,
+       is_pid(Notifier) orelse Notifier =:= no_notifier ->
+    supervisor:start_link(?MODULE,
+                          {Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier});
 start_link(Fount_Name, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth)
   when is_atom(Fount_Behaviour),
        is_list(Init_Args),
        is_integer(Slab_Size),       Slab_Size > 0,
        is_integer(Reservoir_Depth), Reservoir_Depth >= 2 ->
-    supervisor:start_link({local, Fount_Name},  ?MODULE,
+    supervisor:start_link({local, make_sup_name(Fount_Name)}, ?MODULE,
                            {Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth}).
 
 start_link(Fount_Name, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier)
@@ -80,9 +88,11 @@ start_link(Fount_Name, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, N
        is_integer(Slab_Size),       Slab_Size > 0,
        is_integer(Reservoir_Depth), Reservoir_Depth >= 2,
        is_pid(Notifier) orelse Notifier =:= no_notifier ->
-    supervisor:start_link({local, Fount_Name},  ?MODULE,
+    supervisor:start_link({local, make_sup_name(Fount_Name)}, ?MODULE,
                            {Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier}).
 
+make_sup_name(Fount_Name) ->
+    list_to_atom(atom_to_list(Fount_Name) ++ "_sup").
 
 -spec get_regulator(pid()) -> pid().
 
@@ -132,6 +142,15 @@ init({Fount_Name, Fount_Behaviour, Init_Args, Notifier})
   when is_atom(Fount_Name), is_atom(Fount_Behaviour), is_list(Init_Args),
        is_pid(Notifier) orelse Notifier =:= no_notifier ->
     Fount_Args = [self(), Fount_Name, Fount_Behaviour, Init_Args, Notifier],
+    init(internal, Fount_Args);
+
+init({Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier})
+  when is_atom(Fount_Behaviour),
+       is_list(Init_Args),
+       is_integer(Slab_Size),       Slab_Size > 0,
+       is_integer(Reservoir_Depth), Reservoir_Depth >= 2,
+       is_pid(Notifier) orelse Notifier =:= no_notifier ->
+    Fount_Args = [self(), Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier],
     init(internal, Fount_Args);
 
 init({Fount_Name, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth})
