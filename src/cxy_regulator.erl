@@ -176,6 +176,7 @@ pop_pending('NORMAL', #cr_state{pending_requests=PR} = State) ->
     case queue:out(PR) of
         %% Nothing queued, just change state.
         {empty,                            _} -> {next_state, 'NORMAL', State};
+        %% Something queued, handle it.
         {{value, {_Timestamp, Request}}, PR2} ->
             pace_next_slab(),
             'NORMAL' (Request, State#cr_state{pending_requests=PR2})

@@ -713,11 +713,13 @@ reply_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, 
     Full_Slabs_Left = Num_Slabs - Slabs_Needed,
     {{Pids, Remaining_Fount_Pids}, {Slabs_Requested, Remaining_Slabs}, {New_Num_Slabs, New_Fount_Count}}
         = case FC of
-              Excess ->
+              Enough when Enough > Excess, Excess > 0 ->
+                  {lists:split(Excess, Fount), lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, FC-Excess}};
+              Excess when Excess > 0 ->
                   done = replace_slabs(State#cf_state.regulator, Mod, Mod_State, 1, Slab_Size),
                   {{Fount, []}, lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, 0}};
-              Enough when Enough > Excess ->
-                  {lists:split(Excess, Fount), lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, FC-Excess}};
+              Slab_Size when Excess =:= 0 ->
+                  {{Fount, []}, lists:split(Slabs_Needed-1, All_Slabs), {Full_Slabs_Left+1, 0}};
               _Not_Enough ->
                   done = replace_slabs(State#cf_state.regulator, Mod, Mod_State, 1, Slab_Size),
                   {lists:split(Excess, Fount ++ First_Slab), lists:split(Slabs_Needed, More_Slabs), {Full_Slabs_Left-1, FC+Slab_Size-Excess}}
