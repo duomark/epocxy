@@ -23,7 +23,8 @@
 
 %%% Test case exports
 -export([
-         check_construction/1,      check_pause_resume/1
+         check_construction/1,      check_pause_resume/1,
+         check_add_slabs/1
         ]).
 
 -include("epocxy_common_test.hrl").
@@ -41,12 +42,14 @@ all() -> [
           %% Uncomment to test failing user-supplied module.
           %% {group, check_behaviour} % Ensure behaviour crashes properly.
 
-          {group, check_create}    % Verify construction and pause/resume
+          {group, check_create},    % Verify construction and pause/resume
+          {group, check_slabs}
          ].
 
 -spec groups() -> [{test_group(), [sequence], [test_case() | {group, test_group()}]}].
 groups() -> [
-             {check_create,    [sequence], [check_construction, check_pause_resume]}
+             {check_create, [sequence], [check_construction, check_pause_resume]},
+             {check_slabs,  [sequence], [check_add_slabs]}    
             ].
 
 
@@ -85,12 +88,28 @@ check_construction(_Config) ->
     ok.
     
 start_regulator() ->
-    {ok, Pid} = ?TM:start_link(),
-    'NORMAL' = get_status(Pid),
+    {ok, Pid}   = ?TM:start_link(),
+    Full_Status = get_full_status(Pid),
+    'NORMAL'    = get_status_internal           (Full_Status),
+    normal      = get_thruput_internal          (Full_Status),
+    {epoch_slab_counts, 0, {0,0,0,0,0,0,0,0,0,0}}
+                = get_slab_counts_internal      (Full_Status),
+    0           = get_pending_requests_internal (Full_Status),
     Pid.
 
-get_status(Pid) ->
-    proplists:get_value(current_state, ?TM:status(Pid)).
+get_full_status      (Pid) -> ?TM:status(Pid).
+     
+get_status           (Pid) -> get_status_internal           (get_full_status(Pid)).
+get_thruput          (Pid) -> get_thruput_internal          (get_full_status(Pid)).
+get_init_time        (Pid) -> get_init_time_internal        (get_full_status(Pid)).
+get_slab_counts      (Pid) -> get_slab_counts_internal      (get_full_status(Pid)).
+get_pending_requests (Pid) -> get_pending_requests_internal (get_full_status(Pid)).
+
+get_status_internal           (Props) -> proplists:get_value(current_state,    Props).
+get_thruput_internal          (Props) -> proplists:get_value(thruput,          Props).
+get_init_time_internal        (Props) -> proplists:get_value(init_time,        Props).
+get_slab_counts_internal      (Props) -> proplists:get_value(slab_counts,      Props).
+get_pending_requests_internal (Props) -> proplists:get_value(pending_requests, Props).
 
 
 %%%===================================================================
@@ -116,3 +135,61 @@ check_pause_resume(_Config) ->
     Test_Complete = "Reservoir refill edge conditions verified",
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
+
+
+%%%===================================================================
+%%% check_add_slabs/1
+%%%===================================================================
+-spec check_add_slabs(config()) -> ok.
+check_add_slabs(_Config) ->
+    Test = "Check that regulators can add slabs",
+    ct:comment(Test), ct:log(Test),
+
+    Regulator         = start_regulator(),
+    Num_Pids_Per_Slab = 10,
+    Num_Slabs         = 7,
+    Msgs              = receive_add_slab(Regulator, Num_Pids_Per_Slab, Num_Slabs),
+    Exp_Results       = lists:duplicate(Num_Slabs, true),
+    Exp_Results = lists:foldl(fun({Pid_Num, Msg}, Results) ->
+                                      Result = validate_msg(Num_Pids_Per_Slab, Pid_Num, Msg),
+                                      [Result | Results]
+                              end,
+                              [], lists:zip(lists:seq(1, Num_Slabs), lists:sort(Msgs))),
+
+    Test_Complete = "Slab delivered via gen_fsm:send_event to Fount",
+    ct:comment(Test_Complete), ct:log(Test_Complete),
+    ok.
+
+validate_msg(Num_Pids, Pid_Num, {'$gen_event', {slab, Pids, _Time_Stamp, Elapsed}}) ->
+    Num_Pids = length([Pid || Pid <- Pids, is_pid(Pid)]),
+    case Pid_Num of
+        1 -> (Elapsed div 1000) < 100;
+        N -> Avg_Elapsed = (Elapsed div ((N-1) * 1000)),
+             Avg_Elapsed > 80 andalso Avg_Elapsed < 150
+    end.
+
+receive_add_slab(Regulator, Slab_Size, Num_Slabs) ->
+    Self = self(),
+    Fake_Fount = spawn_link(fun() -> fake_fount(Self, []) end),
+    Cmd = allocate_slab_cmd(Fake_Fount, Slab_Size),
+    _ = [gen_fsm:send_event(Regulator, Cmd) || _N <- lists:seq(1, Num_Slabs)],
+    wait_for_add_slab(Fake_Fount).
+
+allocate_slab_cmd(Fount, Slab_Size) ->
+    {allocate_slab, {Fount, cxy_fount_hello_behaviour, {}, os:timestamp(), Slab_Size}}.
+
+wait_for_add_slab(Fake_Fount) ->
+    _ = receive after 1000 -> Fake_Fount ! stop end,
+    receive {fount_msgs, Fake_Fount, Msgs} -> Msgs
+    after 100 -> timeout
+    end.
+
+fake_fount(Receiver, Msgs) ->
+    receive
+        stop -> deliver_msgs(Receiver, Msgs);
+        Msg  -> fake_fount(Receiver, [Msg | Msgs])
+    end.
+
+deliver_msgs(Receiver, Msgs) ->
+    Receiver ! {fount_msgs, self(), Msgs},
+    delivered.

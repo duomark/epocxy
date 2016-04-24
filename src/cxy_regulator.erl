@@ -97,8 +97,14 @@ format_status(_Reason, [_Dict, State]) ->
 generate_status(State_Name, State) ->
     [{current_state, State_Name} | generate_status(State)].
 
-generate_status(#cr_state{thruput=Thruput}) ->
-    [{thruput, Thruput}].
+generate_status(#cr_state{init_time=Started, thruput=Thruput,
+                          slab_counts=SC,    pending_requests=PR}) ->
+    [
+     {init_time,        Started},
+     {thruput,          Thruput},
+     {slab_counts,      SC},
+     {pending_requests, queue:len(PR)}
+    ].
 
 
 %%%------------------------------------------------------------------------------
@@ -157,15 +163,18 @@ allow_spawn(Server_Start_Time, #epoch_slab_counts{} = ESC) ->
             {next_state, 'NORMAL', State#cr_state{slab_counts=New_Slab_Counts}}
     end;
 'NORMAL'  (queued_request, #cr_state{} = State) -> pop_pending ('NORMAL', State);
+%%% Silently skip any unexpected events.
 'NORMAL'  (_Event,         #cr_state{} = State) -> {next_state, 'NORMAL', State}.
 
 %%% Queue up requests if 'OVERMAX' or 'PAUSED'.
 'OVERMAX' (queued_request,                #cr_state{} = State) -> pop_pending        ('NORMAL',  State);
 'OVERMAX' ({allocate_slab, _Args} = Req,  #cr_state{} = State) -> queue_request (Req, 'OVERMAX', State);
+%%% Silently skip any unexpected events.
 'OVERMAX' (_Event,                        #cr_state{} = State) -> {next_state,        'OVERMAX', State}.
 
 'PAUSED'  ({allocate_slab, _Args} = Req,  #cr_state{} = State) -> queue_request (Req, 'PAUSED',  State);
 'PAUSED'  (queued_request,                #cr_state{} = State) -> {next_state,        'PAUSED',  State};
+%%% Silently skip any unexpected events.
 'PAUSED'  (_Event,                        #cr_state{} = State) -> {next_state,        'PAUSED',  State}.
 
 queue_request(Slab_Request, Next_State_Name, #cr_state{pending_requests=PR} = State) ->
