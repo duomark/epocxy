@@ -162,12 +162,12 @@ allow_spawn(Server_Start_Time, #epoch_slab_counts{} = ESC) ->
             allocate_slab(Fount, Module, Mod_State, Timestamp, Slab_Size, []),
             {next_state, 'NORMAL', State#cr_state{slab_counts=New_Slab_Counts}}
     end;
-'NORMAL'  (queued_request, #cr_state{} = State) -> pop_pending ('NORMAL', State);
+'NORMAL'  (queued_request, #cr_state{} = State) -> pop_pending (normal, State);
 %%% Silently skip any unexpected events.
 'NORMAL'  (_Event,         #cr_state{} = State) -> {next_state, 'NORMAL', State}.
 
 %%% Queue up requests if 'OVERMAX' or 'PAUSED'.
-'OVERMAX' (queued_request,                #cr_state{} = State) -> pop_pending        ('NORMAL',  State);
+'OVERMAX' (queued_request,                #cr_state{} = State) -> pop_pending        (normal,  State);
 'OVERMAX' ({allocate_slab, _Args} = Req,  #cr_state{} = State) -> queue_request (Req, 'OVERMAX', State);
 %%% Silently skip any unexpected events.
 'OVERMAX' (_Event,                        #cr_state{} = State) -> {next_state,        'OVERMAX', State}.
@@ -179,19 +179,25 @@ allow_spawn(Server_Start_Time, #epoch_slab_counts{} = ESC) ->
 
 queue_request(Slab_Request, Next_State_Name, #cr_state{pending_requests=PR} = State) ->
     New_Pending = queue:in({os:timestamp(), Slab_Request}, PR),
-    {next_state, Next_State_Name, State#cr_state{pending_requests=New_Pending}}.
+    New_State   = case Next_State_Name of
+                      'OVERMAX' -> State#cr_state{pending_requests=New_Pending, thruput=overmax};
+                      'PAUSED'  -> State#cr_state{pending_requests=New_Pending}
+                  end,
+    {next_state, Next_State_Name, New_State}.
 
-pop_pending('NORMAL', #cr_state{pending_requests=PR} = State) ->
+pop_pending(normal, #cr_state{pending_requests=PR} = State) ->
+    New_State = State#cr_state{thruput=normal},
     case queue:out(PR) of
         %% Nothing queued, just change state.
-        {empty,                            _} -> {next_state, 'NORMAL', State};
+        {empty,                            _} -> {next_state, 'NORMAL', New_State};
         %% Something queued, handle it.
         {{value, {_Timestamp, Request}}, PR2} ->
             pace_next_slab(),
-            'NORMAL' (Request, State#cr_state{pending_requests=PR2})
+            'NORMAL' (Request, New_State#cr_state{pending_requests=PR2})
     end.
 
 pace_next_slab()           -> pace_next_slab(overload_pause_millis()).
+pace_next_slab(0)          -> gen_fsm:send_event(self(), queued_request);
 pace_next_slab(Pause_Time) ->
     timer:apply_after(Pause_Time, gen_fsm, send_event, [self(), queued_request]).
 

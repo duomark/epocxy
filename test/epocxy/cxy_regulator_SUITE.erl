@@ -148,13 +148,23 @@ check_add_slabs(_Config) ->
     Regulator         = start_regulator(),
     Num_Pids_Per_Slab = 10,
     Num_Slabs         = 7,
-    Msgs              = receive_add_slab(Regulator, Num_Pids_Per_Slab, Num_Slabs),
+    {Status1, Msgs}   = receive_add_slab(Regulator, Num_Pids_Per_Slab, Num_Slabs),
     Exp_Results       = lists:duplicate(Num_Slabs, true),
     Exp_Results = lists:foldl(fun({Pid_Num, Msg}, Results) ->
                                       Result = validate_msg(Num_Pids_Per_Slab, Pid_Num, Msg),
                                       [Result | Results]
                               end,
                               [], lists:zip(lists:seq(1, Num_Slabs), lists:sort(Msgs))),
+
+    6         = get_pending_requests_internal (Status1),
+    'OVERMAX' = get_status_internal           (Status1),
+    overmax   = get_thruput_internal          (Status1),
+
+    Status2   = cxy_regulator:status(Regulator),
+
+    0         = get_pending_requests_internal (Status2),
+    'NORMAL'  = get_status_internal           (Status2),
+    normal    = get_thruput_internal          (Status2),
 
     Test_Complete = "Slab delivered via gen_fsm:send_event to Fount",
     ct:comment(Test_Complete), ct:log(Test_Complete),
@@ -173,14 +183,16 @@ receive_add_slab(Regulator, Slab_Size, Num_Slabs) ->
     Fake_Fount = spawn_link(fun() -> fake_fount(Self, []) end),
     Cmd = allocate_slab_cmd(Fake_Fount, Slab_Size),
     _ = [gen_fsm:send_event(Regulator, Cmd) || _N <- lists:seq(1, Num_Slabs)],
-    wait_for_add_slab(Fake_Fount).
+    wait_for_add_slab(Fake_Fount, Regulator).
 
 allocate_slab_cmd(Fount, Slab_Size) ->
     {allocate_slab, {Fount, cxy_fount_hello_behaviour, {}, os:timestamp(), Slab_Size}}.
 
-wait_for_add_slab(Fake_Fount) ->
+wait_for_add_slab(Fake_Fount, Regulator) ->
+    _ = receive after 100 -> continue end,
+    Status = cxy_regulator:status(Regulator),
     _ = receive after 1000 -> Fake_Fount ! stop end,
-    receive {fount_msgs, Fake_Fount, Msgs} -> Msgs
+    receive {fount_msgs, Fake_Fount, Msgs} -> {Status, Msgs}
     after 100 -> timeout
     end.
 
