@@ -18,7 +18,8 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/2, start_link/3, start_link/4, start_link/5,start_link/6, get_regulator/1]).
+-export([start_link/2, start_link/3, start_link/4, start_link/5, start_link/6,
+         get_fount/1, get_regulator/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -94,7 +95,11 @@ start_link(Fount_Name, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, N
 make_sup_name(Fount_Name) ->
     list_to_atom(atom_to_list(Fount_Name) ++ "_sup").
 
--spec get_regulator(pid()) -> pid().
+-spec get_fount     (pid()) -> pid().
+-spec get_regulator (pid()) -> pid().
+
+get_fount(Fount_Sup) ->
+    hd([Pid || {cxy_fount,     Pid, worker, _Modules} <- supervisor:which_children(Fount_Sup)]).
 
 get_regulator(Fount_Sup) ->
     hd([Pid || {cxy_regulator, Pid, worker, _Modules} <- supervisor:which_children(Fount_Sup)]).

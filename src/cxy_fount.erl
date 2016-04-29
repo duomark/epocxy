@@ -701,9 +701,9 @@ reply_pids (Num_Pids,  State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, 
 
 %%% More than 1 pid wanted, more than Slab_Size, see if there are enough to return...
 reply_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, num_slabs=Num_Slabs} = State)
-  when Num_Pids > Slab_Size, Num_Pids < (Num_Slabs * Slab_Size) + FC -> 
+  when Num_Pids > Slab_Size, Num_Pids < (Num_Slabs * Slab_Size) + FC ->
     Excess       = Num_Pids rem Slab_Size,
-    Slabs_Needed = (Num_Pids - Excess) div Slab_Size,
+    Slabs_Needed = Num_Pids div Slab_Size,
     #cf_state{behaviour=Mod, behaviour_state=Mod_State, fount=Fount_Slab,
               reservoir=[#timed_slab{slab=First_Slab} | More_Slabs] = All_Slabs} = State,
     #timed_slab{slab=Fount} = Fount_Slab,
@@ -713,23 +713,42 @@ reply_pids (Num_Pids, _State_Fn, #cf_state{fount_count=FC, slab_size=Slab_Size, 
     Full_Slabs_Left = Num_Slabs - Slabs_Needed,
     {{Pids, Remaining_Fount_Pids}, {Slabs_Requested, Remaining_Slabs}, {New_Num_Slabs, New_Fount_Count}}
         = case FC of
-              Enough when Enough > Excess, Excess > 0 ->
+
+              %% Slabs_Needed is more than is available (so Fount must have more than 1 slab in it)...
+              _Enough when Full_Slabs_Left < 0 ->
+                  Slab_Pids          = Num_Pids - FC,
+                  Final_Slabs_Needed = Slab_Pids div Slab_Size,
+                  Final_Excess       = Slab_Pids rem Slab_Size,
+                  Final_Slabs_Left   = Num_Slabs - Final_Slabs_Needed,
+                  case Final_Excess of
+                      0 when Final_Slabs_Left > 0 ->   % Should never be < 0 (= 0 is covered by all pids used up)
+                          done = replace_slabs(State#cf_state.regulator, Mod, Mod_State, 1, Slab_Size), % Fount empty, replace.
+                          {{Fount, []}, lists:split(Final_Slabs_Needed, All_Slabs), {Final_Slabs_Left, 0}};
+                      FE ->   % All of the Fount + Final_Excess taken from first slab
+                          {lists:split(FC + Final_Excess, Fount ++ First_Slab), lists:split(Final_Slabs_Needed-1, More_Slabs), {Final_Slabs_Left, Slab_Size-FE}}
+                  end;
+
+              %% Take N slabs (no more than present) + Excess from Fount when Fount is bigger than Excess...
+              Enough when Enough > Excess, Excess > 0 ->   % Full_Slabs_Left >= 0
                   {lists:split(Excess, Fount), lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, FC-Excess}};
+
+              %% Take N slabs + Excess from Fount when Excess is exactly Fount size...
               Excess when Excess > 0 ->
-                  done = replace_slabs(State#cf_state.regulator, Mod, Mod_State, 1, Slab_Size),
+                  done = replace_slabs(State#cf_state.regulator, Mod, Mod_State, 1, Slab_Size), % Fount empty, replace.
                   {{Fount, []}, lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, 0}};
-              Slab_Size when Excess =:= 0 ->
-                  {{Fount, []}, lists:split(Slabs_Needed-1, All_Slabs), {Full_Slabs_Left+1, 0}};
-              _Not_Enough ->
-                  done = replace_slabs(State#cf_state.regulator, Mod, Mod_State, 1, Slab_Size),
+
+              %% Take N slabs when no Excess...
+              FC when Excess =:= 0 ->
+                  {{[], Fount}, lists:split(Slabs_Needed, All_Slabs), {Full_Slabs_Left, FC}};
+
+              %% Excess is bigger than Fount.
+              _Not_Enough when Excess > FC ->
+                  done = replace_slabs(State#cf_state.regulator, Mod, Mod_State, 1, Slab_Size), % Replace extra slab needed.
                   {lists:split(Excess, Fount ++ First_Slab), lists:split(Slabs_Needed, More_Slabs), {Full_Slabs_Left-1, FC+Slab_Size-Excess}}
           end,
-    Remaining_Fount = case Remaining_Fount_Pids of
-                          []  -> [];
-                          RFP -> Fount_Slab#timed_slab{slab=RFP}
-                      end,
+    Remaining_Fount = Fount_Slab#timed_slab{slab=Remaining_Fount_Pids},
     Pids_Requested = lists:append([Pids | [S || #timed_slab{slab=S} <- Slabs_Requested]]),
-    New_State_Fn = case Remaining_Fount =:= [] andalso Remaining_Slabs =:= [] of true -> 'EMPTY'; false -> 'LOW' end,
+    New_State_Fn = case Remaining_Fount#timed_slab.slab =:= [] andalso Remaining_Slabs =:= [] of true -> 'EMPTY'; false -> 'LOW' end,
     New_State = State#cf_state{fount=Remaining_Fount, fount_count=New_Fount_Count, reservoir=Remaining_Slabs, num_slabs=New_Num_Slabs},
     case Pids of
         []   -> reply({empty_reply, {get_pids, Num_Pids}}, New_State_Fn, New_State);

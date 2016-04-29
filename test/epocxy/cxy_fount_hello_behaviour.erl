@@ -56,6 +56,6 @@ say_to(Worker, Msg) ->
     Now1 = now(),
     Worker ! {Ref, self(), Msg},
     %% now() is used to guarantee monotonic increasing time
-    receive {Ref, goodbye, Now2} -> true = Now1 < Now2
+    receive {Ref, goodbye, Now2, {elapsed, _Elapsed}} -> true = Now1 < Now2
     after 1000 -> throw(say_hello_timeout)
     end.
