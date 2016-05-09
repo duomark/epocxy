@@ -43,7 +43,7 @@
 -type allocate_slab_args()    :: {pid(), module(), tuple(), erlang:timestamp(), pos_integer()}.
 -type allocate_slab_request() :: {allocate_slab, allocate_slab_args()}.
 
--define(NUM_SLOTS, 10).
+-define(NUM_SLOTS, 100).
 -record(epoch_slab_counts, {
           epoch = 0                                             :: non_neg_integer(),
           slots = list_to_tuple(lists:duplicate(?NUM_SLOTS, 0)) :: tuple()

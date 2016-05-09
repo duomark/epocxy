@@ -101,7 +101,7 @@ verify_full_fount(Slab_Size, Depth) ->
     Fount_Dims = fount_dims(Slab_Size, Depth),
     Case1 = "Verify construction of a " ++ Fount_Dims ++ " fount results in a full reservoir",
     ct:comment(Case1), ct:log(Case1),
-    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
+    {Sup, Fount} = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
 
     Case2 = "Verify that an empty " ++ Fount_Dims ++ " fount refills itself",
     ct:comment(Case2), ct:log(Case2),
@@ -115,6 +115,8 @@ verify_full_fount(Slab_Size, Depth) ->
     ct:comment(Case3), ct:log(Case3),
     true = sets:is_disjoint(sets:from_list(Pids1), sets:from_list(Pids2)),
 
+    unlink(Sup),
+    exit(Sup, kill),
     Complete = "Fount " ++ Fount_Dims ++ " construction verified",
     ct:comment(Complete), ct:log(Complete),
     true.
@@ -123,7 +125,7 @@ start_fount(Behaviour, Slab_Size, Depth) ->
     {ok, Sup} = cxy_fount_sup:start_link(Behaviour, [none], Slab_Size, Depth),
     Fount     = cxy_fount_sup:get_fount(Sup),
     'FULL'    = verify_reservoir_is_full(Fount, Depth),
-    Fount.
+    {Sup, Fount}.
 
 verify_reservoir_is_full(Fount, Num_Of_Spawn_Slices) ->
     Time_To_Sleep = (Num_Of_Spawn_Slices + 1) * 100,
@@ -174,7 +176,7 @@ verify_edges(Slab_Size, Depth) ->
     Case1 = "Verify reservoir " ++ Fount_Dims ++ " fount refill edge conditions",
     ct:comment(Case1), ct:log(Case1),
 
-    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
+    {Sup, Fount} = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
 
     Multiples = [{N, N * Slab_Size} || N <- [1,2,3]],
     Case2_Msg = "Verify ~s fount allocation in slab multiples ~p",
@@ -222,6 +224,8 @@ verify_edges(Slab_Size, Depth) ->
     true = sets:is_disjoint(sets:from_list(Pids10), sets:from_list(Pids11)),
     'FULL' = verify_reservoir_is_full(Fount, 2),
 
+    unlink(Sup),
+    exit(Sup, kill),
     Test_Complete = "Fount " ++ Fount_Dims ++ " pid allocation verified",
     ct:comment(Test_Complete), ct:log(Test_Complete),
     true.
@@ -248,12 +252,15 @@ check_reservoir_refills(_Config) ->
 verify_slab_refills(Slab_Size, Depth, Num_Pids) ->
     ct:log("PropEr testing slab_size ~p, depth ~p with ~w get_pid_fetches",
            [Slab_Size, Depth, Num_Pids]),
-    Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
+    {Sup, Fount} = start_fount(cxy_fount_hello_behaviour, Slab_Size, Depth),
 
     ct:log("Testing get"),
     [verify_pids(Fount, N, Slab_Size, Depth,  get) || N <- Num_Pids],
     ct:log("Testing task"),
     [verify_pids(Fount, N, Slab_Size, Depth, task) || N <- Num_Pids],
+
+    unlink(Sup),
+    exit(Sup, kill),
     true.
 
 verify_pids(Fount, Num_Pids, Slab_Size, Depth, Task_Or_Get) ->
@@ -337,7 +344,7 @@ report_speed(_Config) ->
 
     lists:foreach(
       fun({Slab_Size, Num_Slabs}) ->
-              Fount = start_fount(cxy_fount_hello_behaviour, Slab_Size, Num_Slabs),
+              {Sup, Fount} = start_fount(cxy_fount_hello_behaviour, Slab_Size, Num_Slabs),
               'FULL' = verify_reservoir_is_full(Fount, Num_Slabs), % Give it a chance to fill up
               ct:log("Spawn rate per process with ~p pids for ~p slabs: ~p microseconds",
                      [Slab_Size, Num_Slabs, cxy_fount:get_spawn_rate_per_process(Fount)]),
@@ -347,7 +354,8 @@ report_speed(_Config) ->
                      [Slab_Size, Num_Slabs, cxy_fount:get_total_rate_per_process(Fount)]),
               ct:log("Replacement rate per slab with ~p pids for ~p slabs: ~p microseconds",
                      [Slab_Size, Num_Slabs, cxy_fount:get_total_rate_per_slab(Fount)]),
-              cxy_fount:stop(Fount)
+              unlink(Sup),
+              exit(Sup, kill)
       end, [{5,100}, {20, 50}, {40, 50}, {60, 50}, {80, 50}, {100, 50},
             {150, 50}, {200, 50}, {250, 50}, {300, 50}, {500, 50}]),
 

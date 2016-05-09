@@ -69,7 +69,7 @@ end_per_group  (Config) -> Config.
 -spec init_per_testcase (atom(), config()) -> config().
 -spec end_per_testcase  (atom(), config()) -> config().
 
-init_per_testcase (_Test_Case, Config) -> Config.
+init_per_testcase (_Test_Case, Config) -> [{time_slice, 100} | Config].
 end_per_testcase  (_Test_Case, Config) -> Config.
 
 %% Test Module is ?TM
@@ -79,20 +79,22 @@ end_per_testcase  (_Test_Case, Config) -> Config.
 %%% check_construction/1
 %%%===================================================================
 -spec check_construction(config()) -> ok.
-check_construction(_Config) ->
+check_construction(Config) ->
     Test = "Check that a regulator can be constructed",
     ct:comment(Test), ct:log(Test),
-    _Pid = start_regulator(),
+    _Pid = start_regulator(Config),
     Test_Complete = "Regulator construction verified",
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
     
-start_regulator() ->
+start_regulator(Config) ->
     {ok, Pid}   = ?TM:start_link(),
     Full_Status = get_full_status(Pid),
     'NORMAL'    = get_status_internal           (Full_Status),
     normal      = get_thruput_internal          (Full_Status),
-    {epoch_slab_counts, 0, {0,0,0,0,0,0,0,0,0,0}}
+    Tuple_Slots = proplists:get_value(time_slice, Config),
+    Init_Tuple  = list_to_tuple(lists:duplicate(Tuple_Slots, 0)),
+    {epoch_slab_counts, 0, Init_Tuple}
                 = get_slab_counts_internal      (Full_Status),
     0           = get_pending_requests_internal (Full_Status),
     Pid.
@@ -116,11 +118,11 @@ get_pending_requests_internal (Props) -> proplists:get_value(pending_requests, P
 %%% check_pause_resume/1
 %%%===================================================================
 -spec check_pause_resume(config()) -> ok.
-check_pause_resume(_Config) ->
+check_pause_resume(Config) ->
     Test = "Check that regulators can be paused and resumed",
     ct:comment(Test), ct:log(Test),
 
-    Pid = start_regulator(),
+    Pid = start_regulator(Config),
 
     paused = ?TM:pause(Pid),
     'PAUSED' = get_status(Pid),
@@ -141,20 +143,21 @@ check_pause_resume(_Config) ->
 %%% check_add_slabs/1
 %%%===================================================================
 -spec check_add_slabs(config()) -> ok.
-check_add_slabs(_Config) ->
+check_add_slabs(Config) ->
     Test = "Check that regulators can add slabs",
     ct:comment(Test), ct:log(Test),
 
-    Regulator         = start_regulator(),
+    Regulator         = start_regulator(Config),
     Num_Pids_Per_Slab = 10,
     Num_Slabs         = 7,
-    {Status1, Msgs}   = receive_add_slab(Regulator, Num_Pids_Per_Slab, Num_Slabs),
+    {Status1, Msgs}   = receive_add_slab(Config, Regulator, Num_Pids_Per_Slab, Num_Slabs),
     Exp_Results       = lists:duplicate(Num_Slabs, true),
-    Exp_Results = lists:foldl(fun({Pid_Num, Msg}, Results) ->
-                                      Result = validate_msg(Num_Pids_Per_Slab, Pid_Num, Msg),
-                                      [Result | Results]
-                              end,
-                              [], lists:zip(lists:seq(1, Num_Slabs), lists:sort(Msgs))),
+    Exp_Results = lists:foldl(
+                    fun({Pid_Num, Msg}, Results) ->
+                            Result = validate_msg(Config, Num_Pids_Per_Slab, Pid_Num, Msg),
+                            [Result | Results]
+                    end,
+                    [], lists:zip(lists:seq(1, Num_Slabs), lists:sort(Msgs))),
 
     6         = get_pending_requests_internal (Status1),
     'OVERMAX' = get_status_internal           (Status1),
@@ -170,36 +173,41 @@ check_add_slabs(_Config) ->
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
-validate_msg(Num_Pids, Pid_Num, {'$gen_event', {slab, Pids, _Time_Stamp, Elapsed}}) ->
+validate_msg(Config, Num_Pids, Pid_Num, {'$gen_event', {slab, Pids, _Time_Stamp, Elapsed}}) ->
+    Time_Slice = proplists:get_value(time_slice, Config),
+    Time_Slice_Millis = timer:seconds(1) div Time_Slice,
     Num_Pids = length([Pid || Pid <- Pids, is_pid(Pid)]),
     case Pid_Num of
-        1 -> (Elapsed div 1000) < 100;
-        N -> Avg_Elapsed = (Elapsed div ((N-1) * 1000)),
-             Avg_Elapsed > 80 andalso Avg_Elapsed < 150
+        1 -> (Elapsed div timer:seconds(1)) < 100;
+        N -> Avg_Elapsed = (Elapsed div ((N-1) * timer:seconds(1))),
+             Avg_Elapsed > 0.8 * Time_Slice_Millis
+                 andalso Avg_Elapsed < 1.5 * Time_Slice_Millis
     end.
 
-receive_add_slab(Regulator, Slab_Size, Num_Slabs) ->
+receive_add_slab(Config, Regulator, Slab_Size, Num_Slabs) ->
     Self = self(),
     Fake_Fount = spawn_link(fun() -> fake_fount(Self, []) end),
     Cmd = allocate_slab_cmd(Fake_Fount, Slab_Size),
     _ = [gen_fsm:send_event(Regulator, Cmd) || _N <- lists:seq(1, Num_Slabs)],
-    wait_for_add_slab(Fake_Fount, Regulator).
+    wait_for_add_slab(Config, Fake_Fount, Regulator).
 
 allocate_slab_cmd(Fount, Slab_Size) ->
     {allocate_slab, {Fount, cxy_fount_hello_behaviour, {}, os:timestamp(), Slab_Size}}.
 
-wait_for_add_slab(Fake_Fount, Regulator) ->
-    _ = receive after 100 -> continue end,
+wait_for_add_slab(Config, Fake_Fount, Regulator) ->
+    Time_Slice = proplists:get_value(time_slice, Config),
+    Time_Slice_Millis = timer:seconds(1) div Time_Slice,
+    _ = receive after Time_Slice_Millis -> continue end,
     Status = cxy_regulator:status(Regulator),
-    _ = receive after 1000 -> Fake_Fount ! stop end,
+    _ = receive after timer:seconds(1) -> Fake_Fount ! stop end,
     receive {fount_msgs, Fake_Fount, Msgs} -> {Status, Msgs}
-    after 100 -> timeout
+    after Time_Slice_Millis -> timeout
     end.
 
 fake_fount(Receiver, Msgs) ->
     receive
-        stop -> deliver_msgs(Receiver, Msgs);
-        Msg  -> fake_fount(Receiver, [Msg | Msgs])
+        stop -> deliver_msgs (Receiver, Msgs);
+        Msg  -> fake_fount   (Receiver, [Msg | Msgs])
     end.
 
 deliver_msgs(Receiver, Msgs) ->
