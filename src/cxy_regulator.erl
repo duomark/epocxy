@@ -160,31 +160,44 @@ allow_spawn(Server_Start_Time, #epoch_slab_counts{slots=Slot_Stats} = ESC) ->
 -spec 'PAUSED'  (allocate_slab_request(), cr_state()) -> {next_state, 'PAUSED',  cr_state()}.
 
 %%% Let allocate_slab requests through immediately when 'NORMAL'.
-'NORMAL'  ({allocate_slab, {Fount, Module, Mod_State, Timestamp, Slab_Size}} = Req,
-           #cr_state{init_time=Init_Time, slab_counts=Slab_Counts} = State) ->
+'NORMAL' (Request, #cr_state{} = State) ->
+    case Request of
+        {allocate_slab, _Args}     -> allocate                 (Request, State); % Pace slab allocation.
+        queued_request             -> pop_pending               (normal, State); % Process queue head.
+        _Unknown                   -> {next_state,             'NORMAL', State}  % Skip silently.
+    end.
+
+%%% Queue up requests if 'OVERMAX' or 'PAUSED'.
+'OVERMAX' (Request, #cr_state{} = State) ->
+    case Request of
+        {allocate_slab, _Args}     -> queue_request (Request, 'OVERMAX', State); % Queue all.
+        queued_request             -> pop_pending              (normal,  State); % Process queue head.
+        _Unknown                   -> {next_state,            'OVERMAX', State}  % Skip silently.
+    end.
+
+%%% Paused swallows queued_request events silently, 'resume' required to restart events.
+%%% Slab requests are queued up even if the queue is currently empty.
+'PAUSED' (Request, #cr_state{} = State) ->
+    case Request of
+        {allocate_slab, _Args}     -> queue_request (Request, 'PAUSED',  State); % Queue all.
+        queued_request             -> {next_state,            'PAUSED',  State}; % Swallowed.
+        _Unknown                   -> {next_state,            'PAUSED',  State}  % Skip silently.
+    end.
+
+%%%------------------------------------------------------------------------------
+%%% Asynch internal support functions
+%%%------------------------------------------------------------------------------
+allocate({allocate_slab, {Fount, Module, Mod_State, Timestamp, Slab_Size}} = Request,
+         #cr_state{init_time=Init_Time, slab_counts=Slab_Counts} = State) ->
     case allow_spawn(Init_Time, Slab_Counts) of
         {false, New_Slab_Counts} ->
             Num_Slots = tuple_size(Slab_Counts#epoch_slab_counts.slots),
             pace_slab(Num_Slots),
-            queue_request(Req, 'OVERMAX', State#cr_state{slab_counts=New_Slab_Counts});
+            queue_request(Request, 'OVERMAX', State#cr_state{slab_counts=New_Slab_Counts});
         {true,  New_Slab_Counts} ->
             allocate_slab(Fount, Module, Mod_State, Timestamp, Slab_Size, []),
             {next_state, 'NORMAL', State#cr_state{slab_counts=New_Slab_Counts}}
-    end;
-'NORMAL'  (queued_request, #cr_state{} = State) -> pop_pending (normal, State);
-%%% Silently skip any unexpected events.
-'NORMAL'  (_Event,         #cr_state{} = State) -> {next_state, 'NORMAL', State}.
-
-%%% Queue up requests if 'OVERMAX' or 'PAUSED'.
-'OVERMAX' (queued_request,                #cr_state{} = State) -> pop_pending          (normal,  State);
-'OVERMAX' ({allocate_slab, _Args} = Req,  #cr_state{} = State) -> queue_request (Req, 'OVERMAX', State);
-%%% Silently skip any unexpected events.
-'OVERMAX' (_Event,                        #cr_state{} = State) -> {next_state,        'OVERMAX', State}.
-
-'PAUSED'  ({allocate_slab, _Args} = Req,  #cr_state{} = State) -> queue_request (Req, 'PAUSED',  State);
-'PAUSED'  (queued_request,                #cr_state{} = State) -> {next_state,        'PAUSED',  State};
-%%% Silently skip any unexpected events.
-'PAUSED'  (_Event,                        #cr_state{} = State) -> {next_state,        'PAUSED',  State}.
+    end.
 
 queue_request(Slab_Request, Next_State_Name, #cr_state{pending_requests=PR} = State) ->
     New_Pending = queue:in({os:timestamp(), Slab_Request}, PR),
