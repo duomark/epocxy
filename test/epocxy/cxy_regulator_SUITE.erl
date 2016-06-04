@@ -82,18 +82,30 @@ end_per_testcase  (_Test_Case, Config) -> Config.
 check_construction(Config) ->
     Test = "Check that a regulator can be constructed",
     ct:comment(Test), ct:log(Test),
-    _Pid = start_regulator(Config),
+
+    Pid1 = start_regulator(Config),
+
+    Config2 = [{time_slice, 30} | Config],
+    Pid2    = start_regulator(Config2),
+
+    Config3 = [{time_slice, 300} | Config],
+    Pid3    = start_regulator(Config3),
+
+    _ = [begin unlink(Pid), exit(Pid, kill) end || Pid <- [Pid1, Pid2, Pid3]],
+
     Test_Complete = "Regulator construction verified",
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
     
 start_regulator(Config) ->
-    {ok, Pid}   = ?TM:start_link(),
+    Tuple_Slots = proplists:get_value(time_slice, Config),
+    Init_Tuple  = list_to_tuple(lists:duplicate(Tuple_Slots, 0)),
+    ct:log("Time slice: ~p~nTuple: ~p", [Tuple_Slots, Init_Tuple]),
+
+    {ok, Pid}   = ?TM:start_link(Config),
     Full_Status = get_full_status(Pid),
     'NORMAL'    = get_status_internal           (Full_Status),
     normal      = get_thruput_internal          (Full_Status),
-    Tuple_Slots = proplists:get_value(time_slice, Config),
-    Init_Tuple  = list_to_tuple(lists:duplicate(Tuple_Slots, 0)),
     {epoch_slab_counts, 0, Init_Tuple}
                 = get_slab_counts_internal      (Full_Status),
     0           = get_pending_requests_internal (Full_Status),
@@ -124,15 +136,15 @@ check_pause_resume(Config) ->
 
     Pid = start_regulator(Config),
 
-    paused = ?TM:pause(Pid),
-    'PAUSED' = get_status(Pid),
-    {ignored, pause} = ?TM:pause(Pid),
-    'PAUSED' = get_status(Pid),
+    paused            = ?TM:pause(Pid),
+    'PAUSED'          = get_status(Pid),
+    {ignored, pause}  = ?TM:pause(Pid),
+    'PAUSED'          = get_status(Pid),
 
     {resumed, normal} = ?TM:resume(Pid),
-    'NORMAL' = get_status(Pid),
+    'NORMAL'          = get_status(Pid),
     {ignored, resume} = ?TM:resume(Pid),
-    'NORMAL' = get_status(Pid),
+    'NORMAL'          = get_status(Pid),
 
     Test_Complete = "Reservoir refill edge conditions verified",
     ct:comment(Test_Complete), ct:log(Test_Complete),
@@ -174,20 +186,26 @@ check_add_slabs(Config) ->
     ok.
 
 validate_msg(Config, Num_Pids, Pid_Num, {'$gen_event', {slab, Pids, _Time_Stamp, Elapsed}}) ->
-    Time_Slice = proplists:get_value(time_slice, Config),
+    Time_Slice        = proplists:get_value(time_slice, Config),
     Time_Slice_Millis = timer:seconds(1) div Time_Slice,
-    Num_Pids = length([Pid || Pid <- Pids, is_pid(Pid)]),
+    Num_Pids          = length([Pid || Pid <- Pids, is_pid(Pid)]),
     case Pid_Num of
+
+        %% First spawned slab is immediate...
         1 -> (Elapsed div timer:seconds(1)) < 100;
+
+        %% Subsequent slabs are delayed by the time slice regulator.
         N -> Avg_Elapsed = (Elapsed div ((N-1) * timer:seconds(1))),
-             Avg_Elapsed > 0.8 * Time_Slice_Millis
-                 andalso Avg_Elapsed < 1.5 * Time_Slice_Millis
+             Min_Allowed = 0.8 * Time_Slice_Millis,
+             Max_Allowed = 1.5 * Time_Slice_Millis,
+             Avg_Elapsed > Min_Allowed
+                 andalso Avg_Elapsed < Max_Allowed
     end.
 
 receive_add_slab(Config, Regulator, Slab_Size, Num_Slabs) ->
-    Self = self(),
+    Self       = self(),
     Fake_Fount = spawn_link(fun() -> fake_fount(Self, []) end),
-    Cmd = allocate_slab_cmd(Fake_Fount, Slab_Size),
+    Cmd        = allocate_slab_cmd(Fake_Fount, Slab_Size),
     _ = [gen_fsm:send_event(Regulator, Cmd) || _N <- lists:seq(1, Num_Slabs)],
     wait_for_add_slab(Config, Fake_Fount, Regulator).
 
@@ -195,7 +213,7 @@ allocate_slab_cmd(Fount, Slab_Size) ->
     {allocate_slab, {Fount, cxy_fount_hello_behaviour, {}, os:timestamp(), Slab_Size}}.
 
 wait_for_add_slab(Config, Fake_Fount, Regulator) ->
-    Time_Slice = proplists:get_value(time_slice, Config),
+    Time_Slice        = proplists:get_value(time_slice, Config),
     Time_Slice_Millis = timer:seconds(1) div Time_Slice,
     _ = receive after Time_Slice_Millis -> continue end,
     Status = cxy_regulator:status(Regulator),

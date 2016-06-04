@@ -23,7 +23,7 @@
 
 
 %%% API
--export([start_link/0, pause/1, resume/1, status/1]).
+-export([start_link/0, start_link/1, pause/1, resume/1, status/1]).
 -export([allow_spawn/2]).
 
 %%% gen_fsm callbacks
@@ -43,10 +43,9 @@
 -type allocate_slab_args()    :: {pid(), module(), tuple(), erlang:timestamp(), pos_integer()}.
 -type allocate_slab_request() :: {allocate_slab, allocate_slab_args()}.
 
--define(NUM_SLOTS, 100).
 -record(epoch_slab_counts, {
-          epoch = 0                                             :: non_neg_integer(),
-          slots = list_to_tuple(lists:duplicate(?NUM_SLOTS, 0)) :: tuple()
+          epoch = 0  :: non_neg_integer(),
+          slots = {} :: tuple()
          }).
 -type epoch_slab_counts() :: #epoch_slab_counts{}.
 
@@ -63,10 +62,12 @@
 %%% API
 %%%===================================================================
 
--spec start_link() -> {ok, regulator_ref()}.
+-spec start_link()                     -> {ok, regulator_ref()}.
+-spec start_link(proplists:proplist()) -> {ok, regulator_ref()}.
 
-start_link() ->
-    gen_fsm:start_link(?MODULE, {}, []).
+start_link()       -> gen_fsm:start_link(?MODULE,     {[]}, []).
+start_link(Config) -> gen_fsm:start_link(?MODULE, {Config}, []).
+
 
 -type status_attr() :: {current_state, atom()}   % FSM State function name
                      | {thruput,    thruput()}.  % Paused thruput state
@@ -88,8 +89,13 @@ status (Regulator) -> gen_fsm:sync_send_all_state_event(Regulator, status).
 -spec init({}) -> {ok, 'NORMAL', cr_state()}.
 -spec format_status(normal | terminate, list()) -> proplists:proplist().
 
-init({}) ->
-    {ok, 'NORMAL', #cr_state{}}.
+default_num_slots ()  -> 100.
+make_slot_stats   (N) -> list_to_tuple(lists:duplicate(N, 0)).
+
+init({Config}) ->
+    Num_Slots   = proplists:get_value(time_slice, Config, default_num_slots()),
+    Slab_Counts = #epoch_slab_counts{slots=make_slot_stats(Num_Slots)},
+    {ok, 'NORMAL', #cr_state{slab_counts=Slab_Counts}}.
 
 format_status(_Reason, [_Dict, State]) ->
     generate_status(State).
@@ -110,23 +116,23 @@ generate_status(#cr_state{init_time=Started, thruput=Thruput,
 %%%------------------------------------------------------------------------------
 %%% Spawn pace regulation logic
 %%%   Slots per second slices the spawning to timing buckets.
-%%%   Currently allowing 1/10th of a second per slot, with
-%%%   a single slab generation allowed per time slot.
+%%%   Default is 100 slots per second timing, with one slab allowed per slot.
+%%%   Config 'time_slice' property on init changes from 100 to any 1-N value.
 %%%------------------------------------------------------------------------------
-micros_per_slot()       -> (timer:seconds(1) * 1000) div ?NUM_SLOTS.
-overload_pause_millis() -> (micros_per_slot() div 2) div 1000.
+millis_per_micro()           -> 1000.
+micros_per_slot(Slots)       -> (timer:seconds(1) * millis_per_micro()) div Slots.
+overload_pause_millis(Slots) -> (micros_per_slot(Slots) div 2) div millis_per_micro().
      
-    
-time_slot(Start_Time) ->
+time_slot(Start_Time, Num_Slots) ->
     Micros_Since_Start = timer:now_diff(os:timestamp(), Start_Time),
-    Raw_Epoch = (Micros_Since_Start div micros_per_slot()),
-    Epoch =  Raw_Epoch div ?NUM_SLOTS  + 1,   % don't allow 0
-    Slot  = (Raw_Epoch rem ?NUM_SLOTS) + 1,   % tuples number 1-N
+    Raw_Epoch = (Micros_Since_Start div micros_per_slot(Num_Slots)),
+    Epoch     =  Raw_Epoch div Num_Slots  + 1,   % don't allow 0
+    Slot      = (Raw_Epoch rem Num_Slots) + 1,   % tuples number 1-N
     {Epoch, Slot}.
 
 allow_slab_generation(Slot, #epoch_slab_counts{slots=Slot_Stats} = ESC)
-  when is_tuple(Slot_Stats), tuple_size(Slot_Stats) =:= ?NUM_SLOTS,
-       is_integer(Slot), Slot > 0, Slot =< ?NUM_SLOTS ->
+  when is_tuple(Slot_Stats),
+       is_integer(Slot), Slot > 0, Slot =< tuple_size(Slot_Stats) ->
     case element(Slot, Slot_Stats) of
         1 -> {false, ESC};                                    % Disallow
         0 -> New_Slots = setelement(Slot, Slot_Stats, 1),     % Mark slot
@@ -134,12 +140,14 @@ allow_slab_generation(Slot, #epoch_slab_counts{slots=Slot_Stats} = ESC)
     end.
 
 get_epoch_slots(#epoch_slab_counts{epoch=Slab_Epoch} = ESC, Slab_Epoch) -> ESC;
-get_epoch_slots(_Old_Epoch_Counts, Current_Epoch) ->
-    #epoch_slab_counts{epoch=Current_Epoch}.
+get_epoch_slots(Old_Epoch_Counts, Current_Epoch) ->
+    Num_Slots = tuple_size(Old_Epoch_Counts#epoch_slab_counts.slots),
+    #epoch_slab_counts{epoch=Current_Epoch, slots=make_slot_stats(Num_Slots)}.
 
-allow_spawn(Server_Start_Time, #epoch_slab_counts{} = ESC) ->
-    {Epoch, Slot}  = time_slot(Server_Start_Time),
-    New_ESC = get_epoch_slots(ESC, Epoch),
+allow_spawn(Server_Start_Time, #epoch_slab_counts{slots=Slot_Stats} = ESC) ->
+    Num_Slots      = tuple_size(Slot_Stats),
+    {Epoch, Slot}  = time_slot(Server_Start_Time, Num_Slots),
+    New_ESC        = get_epoch_slots(ESC, Epoch),
     allow_slab_generation(Slot, New_ESC).
 
 
@@ -156,7 +164,8 @@ allow_spawn(Server_Start_Time, #epoch_slab_counts{} = ESC) ->
            #cr_state{init_time=Init_Time, slab_counts=Slab_Counts} = State) ->
     case allow_spawn(Init_Time, Slab_Counts) of
         {false, New_Slab_Counts} ->
-            pace_next_slab(),
+            Num_Slots = tuple_size(Slab_Counts#epoch_slab_counts.slots),
+            pace_slab(Num_Slots),
             queue_request(Req, 'OVERMAX', State#cr_state{slab_counts=New_Slab_Counts});
         {true,  New_Slab_Counts} ->
             allocate_slab(Fount, Module, Mod_State, Timestamp, Slab_Size, []),
@@ -167,7 +176,7 @@ allow_spawn(Server_Start_Time, #epoch_slab_counts{} = ESC) ->
 'NORMAL'  (_Event,         #cr_state{} = State) -> {next_state, 'NORMAL', State}.
 
 %%% Queue up requests if 'OVERMAX' or 'PAUSED'.
-'OVERMAX' (queued_request,                #cr_state{} = State) -> pop_pending        (normal,  State);
+'OVERMAX' (queued_request,                #cr_state{} = State) -> pop_pending          (normal,  State);
 'OVERMAX' ({allocate_slab, _Args} = Req,  #cr_state{} = State) -> queue_request (Req, 'OVERMAX', State);
 %%% Silently skip any unexpected events.
 'OVERMAX' (_Event,                        #cr_state{} = State) -> {next_state,        'OVERMAX', State}.
@@ -185,21 +194,23 @@ queue_request(Slab_Request, Next_State_Name, #cr_state{pending_requests=PR} = St
                   end,
     {next_state, Next_State_Name, New_State}.
 
-pop_pending(normal, #cr_state{pending_requests=PR} = State) ->
+pop_pending(normal, #cr_state{pending_requests=PR, slab_counts=Slab_Counts} = State) ->
+    Num_Slots = tuple_size(Slab_Counts#epoch_slab_counts.slots),
     New_State = State#cr_state{thruput=normal},
     case queue:out(PR) of
         %% Nothing queued, just change state.
         {empty,                            _} -> {next_state, 'NORMAL', New_State};
         %% Something queued, handle it.
         {{value, {_Timestamp, Request}}, PR2} ->
-            pace_next_slab(),
+            pace_slab(Num_Slots),
             'NORMAL' (Request, New_State#cr_state{pending_requests=PR2})
     end.
 
-pace_next_slab()           -> pace_next_slab(overload_pause_millis()).
-pace_next_slab(0)          -> gen_fsm:send_event(self(), queued_request);
-pace_next_slab(Pause_Time) ->
-    timer:apply_after(Pause_Time, gen_fsm, send_event, [self(), queued_request]).
+pace_slab(Num_Slots) -> pace_next_slab(overload_pause_millis(Num_Slots)).
+
+pace_next_slab(           0) -> gen_fsm:send_event(self(), queued_request);
+pace_next_slab(Pause_Millis) ->
+    timer:apply_after(Pause_Millis, gen_fsm, send_event, [self(), queued_request]).
 
 
 %%% Rely on the client behaviour to create new pids. This means using
