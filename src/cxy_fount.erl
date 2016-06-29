@@ -44,9 +44,8 @@
 
 
 %%% API
--export([start_link/3, start_link/4,    % Fount with no name
-         start_link/5, start_link/6,    % Fount with name
-         start_link/7,                  % Fount with name and notifier
+-export([start_link/4,                  % Fount with no name
+         start_link/5,                  % Fount with name
 
          get_pid/1,    get_pids/2,      % Get 1 pid or list of pids
          get_pid/2,    get_pids/3,      % Get 1 pid or list of pids with retry
@@ -78,6 +77,16 @@
 -type fount_ref() :: pid() | atom().  % gen_fsm reference
 -type notifier()  :: no_notifier | pid().
 -export_type([fount_ref/0, notifier/0]).
+
+-type fount_option_pair() :: {notifier,        notifier()}
+                           | {slab_size,       pos_integer()}
+                           | {reservoir_depth, pos_integer()}
+                           | {time_slice,      pos_integer()}.
+
+-type fount_args()    :: list().
+-type fount_options() :: [fount_option_pair()].
+-export_type([fount_option_pair/0, fount_args/0, fount_options/0]).
+
 
 %%%===================================================================
 %%% Behaviour callback helper functions
@@ -164,72 +173,41 @@ default_reply_timeout() -> 500.
 %%%===================================================================
 
 %%% Variant ways of making a fount: with and without a local name, with and without a notifier.
--spec start_link(cxy_regulator:regulator_ref(), module(), list())                                              -> {ok, fount_ref()}.
+-type fount_sup() :: pid().
+-spec start_link(fount_sup(),         module(), fount_args(), fount_options()) -> {ok, fount_ref()}.
+-spec start_link(fount_sup(), atom(), module(), fount_args(), fount_options()) -> {ok, fount_ref()}.
 
--spec start_link(cxy_regulator:regulator_ref(), module(), list(), notifier())                                  -> {ok, fount_ref()};
-                (cxy_regulator:regulator_ref(), atom(), module(), list())                                      -> {ok, fount_ref()}.
+-record(parsed_fount_options,
+        {
+          slab_size = default_slab_size() :: pos_integer(),
+          num_slabs = default_num_slabs() :: pos_integer(),
+          notifier  = no_notifier         :: notifier()
+        }).
+          
+start_link(Fount_Sup_Pid, Fount_Behaviour, Init_Args, Fount_Options)
+  when is_pid(Fount_Sup_Pid), is_atom(Fount_Behaviour),
+       is_list(Init_Args),    is_list(Fount_Options) ->
+    Fsm_Args = {Fount_Sup_Pid, Fount_Behaviour, Init_Args, parse_options(Fount_Options)},
+    gen_fsm:start_link(?MODULE, Fsm_Args, []).
 
--spec start_link(cxy_regulator:regulator_ref(), module(), list(), pos_integer(), pos_integer())                -> {ok, fount_ref()};
-                (cxy_regulator:regulator_ref(), atom(), module(), list(),        notifier())                   -> {ok, fount_ref()}.
+start_link(Fount_Sup_Pid, Fount_Name, Fount_Behaviour, Init_Args, Fount_Options)
+  when is_pid(Fount_Sup_Pid), is_atom(Fount_Name), is_atom(Fount_Behaviour),
+       is_list(Init_Args),    is_list(Fount_Options) ->
+    Fsm_Args = {Fount_Sup_Pid, Fount_Behaviour, Init_Args, parse_options(Fount_Options)},
+    gen_fsm:start_link({local, Fount_Name}, ?MODULE, Fsm_Args, []).
 
--spec start_link(cxy_regulator:regulator_ref(), module(), list(), pos_integer(), pos_integer(), notifier())    -> {ok, fount_ref()};
-                (cxy_regulator:regulator_ref(), atom(), module(), list(),        pos_integer(), pos_integer()) -> {ok, fount_ref()}.
-
--spec start_link(cxy_regulator:regulator_ref(), atom(), module(), list(), pos_integer(), pos_integer(), notifier()) -> {ok, fount_ref()}.
-
-start_link(Fount_Sup_Pid, Fount_Behaviour, Init_Args)
-  when is_pid(Fount_Sup_Pid), is_atom(Fount_Behaviour), is_list(Init_Args) ->
-    start_link(Fount_Sup_Pid, Fount_Behaviour, Init_Args, default_slab_size(), default_num_slabs()).
-
-start_link(Fount_Sup_Pid, Fount_Name, Fount_Behaviour, Init_Args)
-  when is_pid(Fount_Sup_Pid), is_atom(Fount_Name), is_atom(Fount_Behaviour), is_list(Init_Args) ->
-    start_link(Fount_Sup_Pid, Fount_Name, Fount_Behaviour, Init_Args, default_slab_size(), default_num_slabs());
-
-start_link(Fount_Sup_Pid, Fount_Behaviour, Init_Args, Notifier)
-  when is_pid(Fount_Sup_Pid), is_atom(Fount_Behaviour), is_list(Init_Args), is_pid(Notifier) ->
-    start_link(Fount_Sup_Pid, Fount_Behaviour, Init_Args, default_slab_size(), default_num_slabs(), Notifier).
-
-start_link(Fount_Sup_Pid, Fount_Name, Fount_Behaviour, Init_Args, Notifier)
-  when is_pid(Fount_Sup_Pid), is_atom(Fount_Name), is_atom(Fount_Behaviour), is_list(Init_Args), is_pid(Notifier) ->
-    start_link(Fount_Sup_Pid, Fount_Name, Fount_Behaviour, Init_Args, default_slab_size(), default_num_slabs(), Notifier);
-
-start_link(Fount_Sup_Pid, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth)
-  when is_pid(Fount_Sup_Pid),
-       is_atom(Fount_Behaviour),
-       is_list(Init_Args),
-       is_integer(Slab_Size),       Slab_Size > 0,
-       is_integer(Reservoir_Depth), Reservoir_Depth >= 2 ->
-    gen_fsm:start_link(?MODULE, {Fount_Sup_Pid, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, no_notifier}, []).
-
-start_link(Fount_Sup_Pid, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier)
-  when is_pid(Fount_Sup_Pid),
-       is_atom(Fount_Behaviour),
-       is_list(Init_Args),
-       is_integer(Slab_Size),       Slab_Size > 0,
-       is_integer(Reservoir_Depth), Reservoir_Depth >= 2,
-       is_pid(Notifier) ->
-    gen_fsm:start_link(?MODULE, {Fount_Sup_Pid, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier}, []);
-
-start_link(Fount_Sup_Pid, Fount_Name, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth)
-  when is_pid(Fount_Sup_Pid),
-       is_atom(Fount_Name),
-       is_atom(Fount_Behaviour),
-       is_list(Init_Args),
-       is_integer(Slab_Size),       Slab_Size > 0,
-       is_integer(Reservoir_Depth), Reservoir_Depth >= 2 ->
-    gen_fsm:start_link({local, Fount_Name}, ?MODULE,
-                       {Fount_Sup_Pid, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, no_notifier}, []).
-
-start_link(Fount_Sup_Pid, Fount_Name, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier)
-  when is_pid(Fount_Sup_Pid),
-       is_atom(Fount_Name),
-       is_atom(Fount_Behaviour),
-       is_list(Init_Args),
-       is_integer(Slab_Size),       Slab_Size > 0,
-       is_integer(Reservoir_Depth), Reservoir_Depth >= 2,
-       is_pid(Notifier) ->
-    gen_fsm:start_link({local, Fount_Name}, ?MODULE,
-                       {Fount_Sup_Pid, Fount_Behaviour, Init_Args, Slab_Size, Reservoir_Depth, Notifier}, []).
+parse_options(Fount_Options) ->
+    case #parsed_fount_options{
+            slab_size = proplists:get_value(slab_size, Fount_Options, default_slab_size()),
+            num_slabs = proplists:get_value(num_slabs, Fount_Options, default_num_slabs()),
+            notifier  = proplists:get_value(notifier,  Fount_Options, no_notifier)
+           } of
+        #parsed_fount_options{slab_size=SS}     when SS =< 0   -> {error, {slab_size, SS}};
+        #parsed_fount_options{num_slabs=NS}     when NS  < 2   -> {error, {num_slabs, NS}};
+        #parsed_fount_options{notifier=N} = PFO when is_pid(N) -> PFO;
+        #parsed_fount_options{notifier=no_notifier} = PFO      -> PFO;
+        #parsed_fount_options{notifier=Not_Pid}                -> {error, {notifier, Not_Pid}}
+    end.
 
 
 %%% Set or clear a gen_event pid() for notifications of slab replacement.
@@ -255,8 +233,8 @@ stop(Fount) ->
 -spec get_pids (fount_ref(), pos_integer())             -> pid_reply().
 -spec get_pids (fount_ref(), pos_integer(), [option()]) -> pid_reply().
 
-%%% These macros make the code a bit cryptic, but the redundancy was distracting
-%%% and if you take for granted they work, things are more readable.
+%%% These macro are a bit cryptic, but the redundancy was distracting
+%%% and if you take for granted they work, later code is more readable.
 -define(RETRY(__Fount, __Fsm_Msg, __Recurse_Fn, __Delay, __Retry_Option, __Retry_Reduction),
         case gen_fsm:sync_send_event(__Fount, __Fsm_Msg, default_reply_timeout()) of
             []     -> receive after __Delay -> resume end,  % Give a chance for spawns
@@ -434,12 +412,10 @@ get_status                 (Fount) -> gen_fsm:sync_send_all_state_event(Fount, {
 %%% asking the supervisor for the regulator child.
 %%%------------------------------------------------------------------------------
 
--spec init({cxy_regulator:regulator_ref(), module(), list(), pos_integer(), pos_integer()})
-          -> {ok, 'INIT', cf_state()} | {error, any()};
-          ({cxy_regulator:regulator_ref(), module(), list(), pos_integer(), pos_integer(), notifier() | no_notifier})
-          -> {ok, 'INIT', cf_state()} | {error, any()}.
+-spec init({fount_sup(), atom(), list(), #parsed_fount_options{}}) -> {ok, 'INIT', cf_state()} | {error, any()}.
 
-init({Fount_Sup_Pid, Fount_Behaviour, Mod_Init_Args, Slab_Size, Reservoir_Depth, Notifier}) ->
+init({Fount_Sup_Pid, Fount_Behaviour, Mod_Init_Args,
+      #parsed_fount_options{slab_size=Slab_Size, num_slabs=Num_Slabs, notifier=Notifier}}) ->
 
     %% Get any behaviour state that cxy_fount needs to send to slab allocators...
     Behaviour_State = try   apply(Fount_Behaviour, init, Mod_Init_Args)
@@ -464,7 +440,7 @@ init({Fount_Sup_Pid, Fount_Behaviour, Mod_Init_Args, Slab_Size, Reservoir_Depth,
                             behaviour       = Fount_Behaviour,
                             behaviour_state = Behaviour_State,
                             slab_size       = Slab_Size,
-                            depth           = Reservoir_Depth,
+                            depth           = Num_Slabs,
                             notifier        = Notifier
                            },
             {ok, 'INIT', Init_State}

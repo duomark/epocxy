@@ -6,8 +6,11 @@ DEPS = proper
 
 dep_proper = git https://github.com/manopapad/proper master
 
-ERLC_OPTS := +debug_info +"{cover_enabled, true}"
-TEST_ERLC_OPTS := -I include -I test/epocxy $(ERLC_OPTS)
+ERLC_OPTS := +debug_info
+# +\"{cover_enabled, true}\"
+
+TEST_ERLC_OPTS := +debug_info -I include -I test/epocxy
+# +\"{cover_enabled, true}\"
 
 CT_OPTS := -cover test/epocxy.coverspec
 CT_SUITES = cxy_regulator cxy_fount

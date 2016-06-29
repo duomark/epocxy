@@ -9,12 +9,12 @@
   {vsn, "1.1.0"},
   {description, "Erlang Patterns of Concurrency"},
   {modules,      [
-                  batch_feeder,
+                  batch_feeder
                   cxy_cache, cxy_cache_fsm, cxy_cache_sup,
                   cxy_ctl,
                   cxy_fount, cxy_fount_sup, cxy_regulator,
                   cxy_synch,
-                  ets_buffer,
+                  ets_buffer
                  ]},
   {registered,   [cxy_cache_sup]},
   {applications, [kernel, stdlib, sasl]},

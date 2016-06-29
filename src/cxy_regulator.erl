@@ -117,7 +117,7 @@ generate_status(#cr_state{init_time=Started, thruput=Thruput,
 %%% Spawn pace regulation logic
 %%%   Slots per second slices the spawning to timing buckets.
 %%%   Default is 100 slots per second timing, with one slab allowed per slot.
-%%%   Config 'time_slice' property on init changes from 100 to any 1-N value.
+%%%   Config 'time_slice' property on init changes from 100 to any 1 to N value.
 %%%------------------------------------------------------------------------------
 millis_per_micro()           -> 1000.
 micros_per_slot(Slots)       -> (timer:seconds(1) * millis_per_micro()) div Slots.

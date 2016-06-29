@@ -122,14 +122,15 @@ verify_full_fount(Slab_Size, Depth) ->
     true.
     
 start_fount(Behaviour, Slab_Size, Depth) ->
-    {ok, Sup} = cxy_fount_sup:start_link(Behaviour, [none], Slab_Size, Depth),
+    Options   = [{slab_size, Slab_Size}, {num_slabs, Depth}],
+    {ok, Sup} = cxy_fount_sup:start_link(Behaviour, [none], Options),
     Fount     = cxy_fount_sup:get_fount(Sup),
     'FULL'    = verify_reservoir_is_full(Fount, Depth),
     {Sup, Fount}.
 
 verify_reservoir_is_full(Fount, Num_Of_Spawn_Slices) ->
-    Time_To_Sleep = (Num_Of_Spawn_Slices + 1) * 100,
-    timer:sleep(Time_To_Sleep),   % 1/10th second per slab
+    Time_To_Sleep = (Num_Of_Spawn_Slices + 1) * 20,
+    timer:sleep(Time_To_Sleep),   % 1/100th second per slab
     Status = ?TM:get_status(Fount),
     Final_State = proplists:get_value(current_state, Status),
     finish_full(Time_To_Sleep, Final_State, Status).
@@ -312,10 +313,14 @@ check_faulty_behaviour(_Config) ->
     Old_Trap = process_flag(trap_exit, true),
     try
         Slab_Size = 10, Num_Slabs = 3,
-        {ok, Fount1} = ?TM:start_link(cxy_fount_fail_behaviour, Slab_Size, Num_Slabs),
+        Behaviour = cxy_fount_fail_behaviour,
+        Fount_Options = [{slab_size, Slab_Size}, {num_slabs, Num_Slabs}],
+        {ok, Sup1}    = cxy_fount_sup:start_link(Behaviour, [none], Fount_Options),
+        Fount1        = cxy_fount_sup:get_fount(Sup1),
         crashed = bad_pid(Fount1),
 
-        {ok, Fount2} = ?TM:start_link(cxy_fount_fail_behaviour),
+        {ok, Sup2}    = cxy_fount_sup:start_link(Behaviour, [none], []),
+        Fount2        = cxy_fount_sup:get_fount(Sup2),
         crashed = bad_pid(Fount2)
 
     after true = process_flag(trap_exit, Old_Trap)

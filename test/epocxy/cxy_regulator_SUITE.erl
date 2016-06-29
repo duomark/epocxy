@@ -11,11 +11,11 @@
 %%% @end
 %%%------------------------------------------------------------------------------
 -module(cxy_regulator_SUITE).
--auth('jay@duomark.com').
+-author('Jay Nelson <jay@duomark.com>').
 -vsn('').
 
 %%% Common_test exports
--export([all/0, groups/0,
+-export([all/0,               groups/0,
          init_per_suite/1,    end_per_suite/1,
          init_per_group/1,    end_per_group/1,
          init_per_testcase/2, end_per_testcase/2
