@@ -21,3 +21,6 @@ include erlang.mk
 
 run:
 	erl -pa ebin -pa deps/*/ebin -smp enable -name epocxy -boot start_sasl
+
+my_dialyzer:
+	dialyzer --plt .epocxy.plt --no_native --src -r src test/epocxy -I include -Werror_handling -Wrace_conditions -Wunmatched_returns

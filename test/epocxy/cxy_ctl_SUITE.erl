@@ -464,14 +464,16 @@ check_copying_dict(_Config) ->
 
         Pid1b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], all_keys),
         Pid1b ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid1b, Props4} -> [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props4), ok; Any1b -> {any, Any1b}
+        ok = receive {get_pdict, Pid1b, Props4} -> [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props4), ok;
+                     Any1b -> {any, Any1b}
              after 300 -> test_timeout
              end,
         Stable_Pre_Call_Dict = filter_pdict(),
 
         Pid2b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
         Pid2b ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid2b, Props5} -> [{joe, 5},{sam, 7}] = lists:sort(Props5), ok; Any2b -> {any, Any2b}
+        ok = receive {get_pdict, Pid2b, Props5} -> [{joe, 5},{sam, 7}] = lists:sort(Props5), ok;
+                     Any2b -> {any, Any2b}
              after 300 -> test_timeout
              end,
         Stable_Pre_Call_Dict = filter_pdict(),
@@ -480,7 +482,8 @@ check_copying_dict(_Config) ->
         Sue = ?TM:make_process_dictionary_default_value({cxy_ctl, sue}, 4),
         Pid3b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [Joe, Sue]),
         Pid3b ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid3b, Props6} -> [{joe, 5},{sue, 4}] = Props6, ok; Any3b -> {any, Any3b}
+        ok = receive {get_pdict, Pid3b, Props6} -> [{joe, 5},{sue, 4}] = lists:sort(Props6), ok;
+                     Any3b -> {any, Any3b}
              after 300 -> test_timeout
              end,
         Stable_Pre_Call_Dict = filter_pdict(),
