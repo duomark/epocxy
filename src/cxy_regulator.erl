@@ -86,7 +86,7 @@ status (Regulator) -> gen_fsm:sync_send_all_state_event(Regulator, status).
 %%% gen_fsm callbacks
 %%%===================================================================
 
--spec init({}) -> {ok, 'NORMAL', cr_state()}.
+-spec init({proplists:proplist()}) -> {ok, 'NORMAL', cr_state()}.
 -spec format_status(normal | terminate, list()) -> proplists:proplist().
 
 default_num_slots ()  -> 100.
@@ -192,7 +192,7 @@ allocate({allocate_slab, {Fount, Module, Mod_State, Timestamp, Slab_Size}} = Req
     case allow_spawn(Init_Time, Slab_Counts) of
         {false, New_Slab_Counts} ->
             Num_Slots = tuple_size(Slab_Counts#epoch_slab_counts.slots),
-            pace_slab(Num_Slots),
+            _ = pace_slab(Num_Slots),
             queue_request(Request, 'OVERMAX', State#cr_state{slab_counts=New_Slab_Counts});
         {true,  New_Slab_Counts} ->
             allocate_slab(Fount, Module, Mod_State, Timestamp, Slab_Size, []),
@@ -215,7 +215,7 @@ pop_pending(normal, #cr_state{pending_requests=PR, slab_counts=Slab_Counts} = St
         {empty,                            _} -> {next_state, 'NORMAL', New_State};
         %% Something queued, handle it.
         {{value, {_Timestamp, Request}}, PR2} ->
-            pace_slab(Num_Slots),
+            _ = pace_slab(Num_Slots),
             'NORMAL' (Request, New_State#cr_state{pending_requests=PR2})
     end.
 
@@ -255,9 +255,10 @@ allocate_slab(Fount_Pid, Module, Mod_State, Start_Time, Num_To_Spawn, Slab)
 
 -type synch_request() :: pause | resume | status.
 
--spec 'NORMAL'  (synch_request(), {pid(), reference()}, cr_state()) -> {reply, [], 'NORMAL',  cr_state()}.
--spec 'OVERMAX' (synch_request(), {pid(), reference()}, cr_state()) -> {reply, [], 'OVERMAX', cr_state()}.
--spec 'PAUSED'  (synch_request(), {pid(), reference()}, cr_state()) -> {reply, [], 'PAUSED',  cr_state()}.
+-spec 'NORMAL'  (synch_request(), {pid(), reference()}, cr_state()) -> {reply, paused | {ignored, any()}, 'NORMAL',  cr_state()}.
+-spec 'OVERMAX' (synch_request(), {pid(), reference()}, cr_state()) -> {reply, paused | {ignored, any()}, 'OVERMAX', cr_state()}.
+-spec 'PAUSED'  (synch_request(), {pid(), reference()}, cr_state()) -> {reply, {resumed, normal | overmax}
+                                                                                      | {ignored, any()}, 'PAUSED',  cr_state()}.
 
 %%% 'NORMAL' means no throttling is occurring
 'NORMAL' (pause, _From,  #cr_state{} = State) -> {reply, paused,           'PAUSED',  State};
@@ -268,9 +269,9 @@ allocate_slab(Fount_Pid, Module, Mod_State, Start_Time, Num_To_Spawn, Slab)
 'OVERMAX' (Event, _From, #cr_state{} = State) -> {reply, {ignored, Event}, 'OVERMAX', State}.
 
 %%% 'PAUSED' means manually stopped, will resume either 'NORMAL' or 'OVERMAX'
-'PAUSED' (resume, _From, #cr_state{thruput=normal}  = State) -> pace_next_slab(0), {reply, {resumed, normal},  'NORMAL',  State};
-'PAUSED' (resume, _From, #cr_state{thruput=overmax} = State) -> pace_next_slab(0), {reply, {resumed, overmax}, 'OVERMAX', State};
-'PAUSED' (Event,  _From, #cr_state{}                = State) ->                    {reply, {ignored, Event},   'PAUSED',  State}.
+'PAUSED' (resume, _From, #cr_state{thruput=normal}  = State) -> _ = pace_next_slab(0), {reply, {resumed, normal},  'NORMAL',  State};
+'PAUSED' (resume, _From, #cr_state{thruput=overmax} = State) -> _ = pace_next_slab(0), {reply, {resumed, overmax}, 'OVERMAX', State};
+'PAUSED' (Event,  _From, #cr_state{}                = State) ->                        {reply, {ignored, Event},   'PAUSED',  State}.
 
 
 %%%------------------------------------------------------------------------------

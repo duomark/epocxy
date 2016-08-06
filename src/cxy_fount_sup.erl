@@ -72,7 +72,7 @@ get_regulator(Fount_Sup) ->
 %%% Supervisor callbacks
 %%%===================================================================
 
--type restart() :: {supervisor:strategy(), non_neg_integer(), non_neg_integer()}.
+-type restart() :: {supervisor:strategy(), non_neg_integer(), pos_integer()}.
 -type sup_init_return() :: {ok, {restart(), [supervisor:child_spec()]}}.
 
 -define(CHILD(__Mod, __Args), {__Mod, {__Mod, start_link, __Args}, temporary, 2000, worker, [__Mod]}).
@@ -80,7 +80,7 @@ get_regulator(Fount_Sup) ->
 %%% Init without or with Fount_Name.
 -spec init({        module(), cxy_fount:fount_args()})                            -> sup_init_return();
           ({atom(), module(), cxy_fount:fount_args()})                            -> sup_init_return();
-          ({        module(), cxy_fount:fount_args(), cxy_fount:fount_options()}) -> sup_init_return;
+          ({        module(), cxy_fount:fount_args(), cxy_fount:fount_options()}) -> sup_init_return();
           ({atom(), module(), cxy_fount:fount_args(), cxy_fount:fount_options()}) -> sup_init_return().
 
 init({Fount_Behaviour, Init_Args})

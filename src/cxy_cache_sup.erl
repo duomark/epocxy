@@ -78,7 +78,7 @@ start_cache(Cache_Name, Cache_Mod, Type, Threshold)
 %% Supervisor callbacks
 %% ===================================================================
 
--type restart() :: {supervisor:strategy(), non_neg_integer(), non_neg_integer()}.
+-type restart() :: {supervisor:strategy(), non_neg_integer(), pos_integer()}.
 -type sup_init_return() :: {ok, {restart(), [supervisor:child_spec()]}}.
 
 -spec init({}) -> sup_init_return().

@@ -150,7 +150,8 @@ send_msg(Worker_Pid, Msg)
 
 -record(cf_state,
         {
-          regulator                   :: cxy_regulator:regulator_ref(), % regulator fsm pid()
+          regulator   = undefined     :: undefined
+                                       | cxy_regulator:regulator_ref(), % regulator fsm pid()
           behaviour                   :: module(),            % Worker action behaviour module
           behaviour_state             :: any(),               % Fount initialized state
           fount       = #timed_slab{} :: timed_slab(),        % One slab, start, spawn time, entire time
@@ -205,8 +206,7 @@ parse_options(Fount_Options) ->
         #parsed_fount_options{slab_size=SS}     when SS =< 0   -> {error, {slab_size, SS}};
         #parsed_fount_options{num_slabs=NS}     when NS  < 2   -> {error, {num_slabs, NS}};
         #parsed_fount_options{notifier=N} = PFO when is_pid(N) -> PFO;
-        #parsed_fount_options{notifier=no_notifier} = PFO      -> PFO;
-        #parsed_fount_options{notifier=Not_Pid}                -> {error, {notifier, Not_Pid}}
+        #parsed_fount_options{notifier=no_notifier} = PFO      -> PFO
     end.
 
 
@@ -326,12 +326,12 @@ task_pid(Fount, Msg) ->
 task_pid(_Fount, _Msg, [{retry_times,     0}]) -> [];
 task_pid( Fount,  Msg, [{retry_times, Times}])
   when is_integer(Times), Times > 0 ->
-    ?RETRY(Fount, Msg, {task_pids, [Msg]}, task_pid, retry_times, Times-1);
+    ?RETRY(Fount, Msg, {task_pids, [Msg]}, task_pid, 5, retry_times, Times-1);
 
-task_pid(_Fount, _Msg, [{retry_backoff,           []}]) -> [];
-task_pid( Fount,  Msg, [{retry_backoff, [D | Delays]}])
-  when is_integer(D), D >= 0 ->
-    ?RETRY(Fount, Msg, {task_pids, [Msg]}, task_pid, retry_backoff, Delays).
+task_pid(_Fount, _Msg, [{retry_backoff,                           []}]) -> [];
+task_pid( Fount,  Msg, [{retry_backoff, [This_Delay | Future_Delays]}])
+  when is_integer(This_Delay), This_Delay >= 0 ->
+    ?RETRY(Fount, Msg, {task_pids, [Msg]}, task_pid, This_Delay, retry_backoff, Future_Delays).
 
 %% %%% Retry with a {Delay_Time, Next_Continuation_Fun} mechanism.
 %% task_pid( Fount,  Msg, [{retry_fun, Retry_Fun}, {delay, D}])
@@ -355,14 +355,14 @@ task_pids(_Fount, _Msgs, [{retry_times,     0}])
     [];
 task_pids( Fount,  Msgs, [{retry_times, Times}])
   when is_list(Msgs), is_integer(Times), Times > 0 ->
-    ?RETRY(Fount, Msgs, {task_pids, Msgs}, task_pids, retry_times, Times-1);
+    ?RETRY(Fount, Msgs, {task_pids, Msgs}, task_pids, 5, retry_times, Times-1);
 
 task_pids(_Fount, _Msgs, [{retry_backoff,           []}])
   when is_list(_Msgs) ->
     [];
-task_pids( Fount,  Msgs, [{retry_backoff, [D | Delays]}])
-  when is_list(Msgs), is_integer(D), D >= 0 ->
-    ?RETRY(Fount, Msgs, {task_pids, Msgs}, task_pids, retry_backoff, Delays).
+task_pids( Fount,  Msgs, [{retry_backoff, [This_Delay | Future_Delays]}])
+  when is_list(Msgs), is_integer(This_Delay), This_Delay >= 0 ->
+    ?RETRY(Fount, Msgs, {task_pids, Msgs}, task_pids, This_Delay, retry_backoff, Future_Delays).
 
 %% %%% Retry with a {Delay_Time, Next_Continuation_Fun} mechanism.
 %% task_pids( Fount,  Msg, [{retry_fun, Retry_Fun}, {delay, D}])
@@ -412,14 +412,15 @@ get_status                 (Fount) -> gen_fsm:sync_send_all_state_event(Fount, {
 %%% asking the supervisor for the regulator child.
 %%%------------------------------------------------------------------------------
 
--spec init({fount_sup(), atom(), list(), #parsed_fount_options{}}) -> {ok, 'INIT', cf_state()} | {error, any()}.
+-spec init({fount_sup(), atom(), list(), #parsed_fount_options{}})
+          -> {ok, 'INIT', cf_state()} | {stop, {error, any()}}.
 
 init({Fount_Sup_Pid, Fount_Behaviour, Mod_Init_Args,
       #parsed_fount_options{slab_size=Slab_Size, num_slabs=Num_Slabs, notifier=Notifier}}) ->
 
     %% Get any behaviour state that cxy_fount needs to send to slab allocators...
     Behaviour_State = try   apply(Fount_Behaviour, init, Mod_Init_Args)
-                      catch Class:Error -> {error, {Class, Error}}
+                      catch Class:Error -> {stop, {error, {Class, Error}}}
                       end,
 
     case Behaviour_State of
@@ -428,7 +429,7 @@ init({Fount_Sup_Pid, Fount_Behaviour, Mod_Init_Args,
         {error, _Reason} = Result ->
             error_logger:error_msg("Fount_Behaviour ~p failed initialization with args ~p",
                                    [Fount_Behaviour, Mod_Init_Args]),
-            Result;
+            {stop, Result};
 
         %% Initialize the internal state with the Module Behaviour's init state.
         Behaviour_State ->
@@ -445,7 +446,6 @@ init({Fount_Sup_Pid, Fount_Behaviour, Mod_Init_Args,
                            },
             {ok, 'INIT', Init_State}
     end.
-
 
 %%% Report summarized internal state to sys:get_status or crash logging.
 -spec format_status(normal | terminate, list()) -> proplists:proplist().
