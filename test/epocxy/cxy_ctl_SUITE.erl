@@ -445,30 +445,33 @@ check_copying_dict(_Config) ->
 
         ok = ?TM:execute_task(Spawn_Type, ?MODULE, fetch_ets_ages, [Ets_Table], all_keys),
         erlang:yield(),
-        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{results, Props1}] = ets:tab2list(Ets_Table),
+        [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props1),
         Stable_Pre_Call_Dict = filter_pdict(),
 
         ok = ?TM:execute_task(Spawn_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
         erlang:yield(),
-        [{results, [{sam, 7},{joe, 5}]}] = ets:tab2list(Ets_Table),
+        [{results, Props2}] = ets:tab2list(Ets_Table),
+        [{joe, 5},{sam, 7}] = lists:sort(Props2),
         Stable_Pre_Call_Dict = filter_pdict(),
 
         ok = ?TM:execute_task(Spawn_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [Joe, Sue]),
         erlang:yield(),
-        [{results, [{sue, 4},{joe, 5}]}] = ets:tab2list(Ets_Table),
+        [{results, Props3}] = ets:tab2list(Ets_Table),
+        [{joe, 5},{sue, 4}] = lists:sort(Props3),
         Stable_Pre_Call_Dict = filter_pdict(),
         
 
         Pid1b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], all_keys),
         Pid1b ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid1b, [{ann,13},{joe, 5},{sam, 7}]} -> ok; Any1b -> {any, Any1b}
+        ok = receive {get_pdict, Pid1b, Props4} -> [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props4), ok; Any1b -> {any, Any1b}
              after 300 -> test_timeout
              end,
         Stable_Pre_Call_Dict = filter_pdict(),
 
         Pid2b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
         Pid2b ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid2b, [{sam, 7},{joe, 5}]} -> ok; Any2b -> {any, Any2b}
+        ok = receive {get_pdict, Pid2b, Props5} -> [{joe, 5},{sam, 7}] = lists:sort(Props5), ok; Any2b -> {any, Any2b}
              after 300 -> test_timeout
              end,
         Stable_Pre_Call_Dict = filter_pdict(),
@@ -477,37 +480,43 @@ check_copying_dict(_Config) ->
         Sue = ?TM:make_process_dictionary_default_value({cxy_ctl, sue}, 4),
         Pid3b = ?TM:execute_pid_link(Spawn_Type, ?MODULE, fetch_ages, [], [Joe, Sue]),
         Pid3b ! {Self, get_pdict},
-        ok = receive {get_pdict, Pid3b, [{sue, 4},{joe, 5}]} -> ok; Any3b -> {any, Any3b}
+        ok = receive {get_pdict, Pid3b, Props6} -> [{joe, 5},{sue, 4}] = Props6, ok; Any3b -> {any, Any3b}
              after 300 -> test_timeout
              end,
         Stable_Pre_Call_Dict = filter_pdict(),
 
         %% Inlines mess up the local dictionary, so do them last...
         ok = ?TM:execute_task(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], all_keys),
-        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{results, Props7}] = ets:tab2list(Ets_Table),
+        [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props7),
         Stable_Pre_Call_Dict = filter_pdict(),
 
         {inline, ok} = ?TM:execute_pid_link(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], all_keys),
-        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{results, Props8}] = ets:tab2list(Ets_Table),
+        [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props8),
         Stable_Pre_Call_Dict = filter_pdict(),
 
         ok = ?TM:execute_task(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
-        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{results, Props9}] = ets:tab2list(Ets_Table),
+        [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props9),
         Stable_Pre_Call_Dict = filter_pdict(),
 
         {inline, ok} = ?TM:execute_pid_link(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [{cxy_ctl, joe}, {cxy_ctl, sam}]),
-        [{results, [{ann,13},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{results, Props10}] = ets:tab2list(Ets_Table),
+        [{ann,13},{joe, 5},{sam, 7}] = lists:sort(Props10),
         Stable_Pre_Call_Dict = filter_pdict(),
 
         ok = ?TM:execute_task(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [Joe, Sue]),
-        [{results, [{ann,13},{sue,4},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{results, Props11}] = ets:tab2list(Ets_Table),
+        [{ann,13},{joe, 5},{sam, 7},{sue,4}] = lists:sort(Props11),
         [{sue,4}] = filter_pdict() -- Stable_Pre_Call_Dict,
 
         erase({cxy_ctl, sue}),
 
         Stable_Pre_Call_Dict = filter_pdict(),
         {inline, ok} = ?TM:execute_pid_link(Inline_Type, ?MODULE, fetch_ets_ages, [Ets_Table], [Joe, Sue]),
-        [{results, [{ann,13},{sue,4},{joe, 5},{sam, 7}]}] = ets:tab2list(Ets_Table),
+        [{results, Props12}] = ets:tab2list(Ets_Table),
+        [{ann,13},{joe, 5},{sam, 7},{sue,4}] = lists:sort(Props12),
         [{sue,4}] = filter_pdict() -- Stable_Pre_Call_Dict,
 
         true = ets:delete(Ets_Table)
