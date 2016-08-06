@@ -1,3 +1,7 @@
+%% -*- mode: erlang -*-
+%% -*- tab-width: 4;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% ex: ts=4 sw=4 et
+
 %%%------------------------------------------------------------------------------
 %%% @copyright (c) 2015-2016, DuoMark International, Inc.
 %%% @author Jay Nelson <jay@duomark.com>
@@ -15,5 +19,8 @@
                   ets_buffer_SUITE,
                   cxy_ctl_SUITE,
                   cxy_cache_SUITE,
+
+                  %% cxy_fount has multiple components
+                  cxy_regulator_SUITE,
                   cxy_fount_SUITE
                  ]}.

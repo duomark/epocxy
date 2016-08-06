@@ -14,7 +14,8 @@
 -behaviour(cxy_fount).
 
 %% Behaviour API
--export([start_pid/1, send_msg/2]).
+-export([init/1, start_pid/2, send_msg/2]).
 
-start_pid (_Fount)       -> bad_pid.
+init      (_)            -> {}.
+start_pid (_Fount, {})   -> bad_pid.
 send_msg  (Worker, _Msg) -> Worker.

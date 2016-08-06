@@ -14,25 +14,41 @@
 -behaviour(cxy_fount).
 
 %% Behaviour API
--export([start_pid/1, send_msg/2]).
+-export([init/1, start_pid/2, send_msg/2]).
 
 %% For testing only
 -export([say_to/2]).
 
--include("cxy_fount.hrl").
+-type fount   () :: cxy_fount:fount_ref().
+-type stamp   () :: erlang:timestamp().
+-type pid_msg () :: any().
 
-start_pid(Fount) ->
-    cxy_fount:spawn_worker(Fount, fun wait_for_hello/0).
+-spec init      (any())             -> stamp().
+-spec start_pid (fount(),  stamp()) -> pid()  | {error, Reason::any()}.
+-spec send_msg  (Worker, pid_msg()) -> Worker | {error, Reason::any()}
+                                           when Worker :: pid().
+
+init(_) ->
+    os:timestamp().
+    
+start_pid(Fount, Started) ->
+    cxy_fount:spawn_worker(Fount, fun wait_for_hello/1, [Started]).
     
 send_msg(Worker, Msg) ->
     spawn_link(fun() -> say_to(Worker, Msg) end),
     Worker.
 
 %% Idle workers may wait a while before being used in a test.
-wait_for_hello() ->
-    receive {Ref, From, hello} -> From ! {Ref, goodbye, now()}
+wait_for_hello(Started) ->
+    receive
+        {Ref, From,      hello} -> reply(Started, From, Ref, goodbye);
+        {Ref, From, Unexpected} -> reply(Started, From, Ref, {unexpected, Unexpected})
     after 30000 -> wait_for_hello_timeout
     end.
+
+reply(Started, From, Ref, Msg) ->
+    Elapsed = timer:now_diff(os:timestamp(), Started),
+    From ! {Ref, Msg, now(), {elapsed, Elapsed}}.
 
 %% Just verify the goodbye response comes after saying hello.
 say_to(Worker, Msg) ->
@@ -40,6 +56,6 @@ say_to(Worker, Msg) ->
     Now1 = now(),
     Worker ! {Ref, self(), Msg},
     %% now() is used to guarantee monotonic increasing time
-    receive {Ref, goodbye, Now2} -> true = Now1 < Now2
+    receive {Ref, goodbye, Now2, {elapsed, _Elapsed}} -> true = Now1 < Now2
     after 1000 -> throw(say_hello_timeout)
     end.
