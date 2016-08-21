@@ -27,7 +27,7 @@
 -behaviour(cxy_fount).
 
 %%% External API
--export([format_data/2]).
+-export([collect_data/3, format_data/1]).
 
 %%% Behaviour API
 -export([init/1, start_pid/2, send_msg/2]).
@@ -40,8 +40,20 @@
 %%%===================================================================
 %%% External API
 %%%===================================================================
-format_data(Fount, Data) ->
-    cxy_fount:task_pid(Fount, {load, Data}).
+-spec collect_data (cxy_fount:fount_ref(), binary(), pid()) -> [pid()].
+-spec format_data  (pid()) -> string() | no_results.
+
+collect_data(Fount, Data, Caller) ->
+    cxy_fount:task_pid(Fount, {load, Data, Caller}).
+
+format_data(Hex_Collector) ->
+    receive {hexdump, Lines} ->
+            lists:flatten(
+              [io_lib:format("  ~p.  ~s ~s  |~s|  ~p~n",
+                             [Index, Address, Hexpairs, Window, Pid])
+               || {Index, Address, Hexpairs, Window, Pid} <- Lines])
+    after 1000 -> no_results
+    end.
 
 
 %%%===================================================================
@@ -68,7 +80,7 @@ format_data(Fount, Data) ->
 -type worker()      :: loader()   | formatter()  | collector().
 -type hexdump_cmd() :: load_cmd() | format_cmd() | collect_cmd().
 
--spec init({}) -> {}.
+-spec init({pid()}) -> {pid()}.
 -spec start_pid(cxy_fount:fount_ref(), {}) -> pid().
 -spec send_msg(Worker, hexdump_cmd()) -> Worker when Worker :: worker().
 
@@ -95,11 +107,11 @@ formatter(Fount, {}) ->
     receive
 
         %% First stage data loader
-        {load, Data} when is_binary(Data) ->
+        {load, Data, Caller} when is_binary(Data), is_pid(Caller) ->
             Lines = split_lines(Data, [], 0),
             Num_Workers = length(Lines),
             [Collector | Workers] = cxy_fount:get_pids(Fount, Num_Workers+1),
-            Collector ! {collect, Num_Workers},
+            Collector ! {collect, Num_Workers, Caller},
             done = send_format_msgs(Workers, Lines, Collector);
 
         %% Data formatting worker
@@ -107,27 +119,25 @@ formatter(Fount, {}) ->
             Collector ! {collect, Position, addr(Address), hex(Line), Line, self()};
 
         %% Collector
-        {collect, Num_Workers} ->
-            collect_hexdump_lines(array:new(), Num_Workers)
+        {collect, Num_Workers, Requester} ->
+            collect_hexdump_lines(array:new(), Num_Workers, Requester)
     end.
 
 %%% Collect and display the hexdump.
-line_fmt(Index, {Address, Hexchars, Window, Pid}, {}) ->
-    error_logger:error_msg("  ~p.  ~s ~s  |~s|  ~p~n",
-                           [Index, Address, string:join(Hexchars, " "), Window, Pid]),
-    {}.
+line_fmt(Index, {Address, Hexchars, Window, Pid}, Lines) ->
+    Hexpairs = string:join(Hexchars, " "),
+    [{Index, Address, Hexpairs, Window, Pid} | Lines].
 
-collect_hexdump_lines(Array, 0) ->
-    error_logger:error_msg("Collector ~p Hexdump:~n", [self()]),
-    array:foldl(fun line_fmt/3, {}, Array);
-collect_hexdump_lines(Array, Remaining_Responses) ->
+collect_hexdump_lines(Array, 0, Requester) ->
+    Requester ! {hexdump, lists:reverse(array:foldl(fun line_fmt/3, [], Array))};
+collect_hexdump_lines(Array, Remaining_Responses, Requester) ->
     receive
         {collect, Position, Address, Hexchars, Window, Pid}
           when is_integer(Position), Position >= 0,
                is_binary(Address), is_list(Hexchars), is_binary(Window) ->
             Array_Value = {Address, Hexchars, Window, Pid},
             New_Array = array:set(Position, Array_Value, Array),
-            collect_hexdump_lines(New_Array, Remaining_Responses-1)
+            collect_hexdump_lines(New_Array, Remaining_Responses-1, Requester)
     end.
 
 
