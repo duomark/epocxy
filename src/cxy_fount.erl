@@ -587,7 +587,7 @@ reply_task(Msgs, State_Fn, #cf_state{behaviour=Module} = State)
     Reply = {reply, Workers, _New_State_Name, _New_State}
         = reply_pids(Num_Pids, State_Fn, State),
 
-    %% Message workers only after they have been unlinked.
+    %% Message workers only after they have been unlinked, if workers are available.
     _ = [all_sent = msg_workers(Module, Workers, Msgs) || Workers =/= []],
     Reply.
 
