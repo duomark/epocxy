@@ -3,8 +3,11 @@ erl_crash.dump
 deps
 ebin
 logs
+*.DS_Store
+*.d
 *.o
 *.beam
 *.plt
 *~
+.erlang.mk
 .erlang.mk.packages.*
