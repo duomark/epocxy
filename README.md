@@ -1,11 +1,17 @@
 Erlang Patterns of Concurrency (epocxy)
 =======================================
 
+NOTE:
+  - Please use tags when including this library. The master branch may contain partial or incomplete new features if you use the latest HEAD.
+  - 'make tests' is significantly slower in 1.1.0 because of cxy_fount PropEr tests. Enchancements are planned to speed testing in 1.1.1. Production performance is not impacted.
+
 Erlang/OTP offers many components for distributed, concurrent, fault-tolerant, non-stop services. Many concurrent systems need common constructs which are not provided in the basic OTP system. This library is an Open Source set of concurrency tools which have been proven in a production environment and are being released publicly in anticipation that community interest and contributions will lead to the most useful tools being submitted for inclusion in Erlang/OTP.
 
 This library is released under a "Modified BSD License". The library was sponsored by [TigerText](http://tigertext.com/) during 2013, and was validated on their HIPAA-compliant secure text XMPP servers in a production environment handling more than 1M messages per day.
 
 A talk from Erlang Factory San Francisco 2014 on this library is in the 'doc' directory.
+
+Concurrency Fount was added in 2016 and the 'doc' directory includes the slides from a talk at EUC 2016, as well as quick summary of the epocxy patterns.
 
 
 ETS (Erlang Term Storage)
@@ -37,6 +43,15 @@ Most distributed systems need dynamic adaptation to traffic demand, however, the
 
 A more lightweight approach is to limit concurrency via a governor on the number of processes active. When the limit is exceeded functions are executed inline rather than spawned, thus providing much needed backpressure on the source of the concurrency requests. The governor here is implemented as a counter in an ETS table with optional execution performance times recorded in a ring buffer residing in the same ETS table.
 
+
+Concurrency Fount
+-----------------
+
+Concurrency fount (cxy_fount) offers an alternative control to avoid concurrency overload. It is a reservoir of one-shot pre-spawned processes which refresh at a controlled rate. The reservoir represents a pre-allocation of the total potential computational power for a single category of tasks on a node. Once it is consumed, no additional work should be started (or even accepted) until the compute potential is partially replenished. It is assumed that actual progress is made with allocated workers, so that they complete before too many new processes are available.
+
+This pattern uses a supervisor and two gen_fsms, and does not rely on any ets tables. The cxy_fount API is a serial mailbox on the cxy_fount process, so it may become a limiting factor in some situations, but the overall structure is designed to avoid catastrophic failure in favor of surviving individual failures (even if occuring rapidly and repeatedly in the worker tasks).
+
+The cxy_fount pattern is new as of Version 1.1.0, and more improvements will arrive before 1.2.0.
 
 Caches
 ------
