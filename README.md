@@ -4,6 +4,7 @@ Erlang Patterns of Concurrency (epocxy)
 NOTE:
   - Please use tags when including this library. The master branch may contain partial or incomplete new features if you use the latest HEAD.
   - 'make tests' is significantly slower in 1.1.0 because of cxy_fount PropEr tests. Enchancements are planned to speed testing in 1.1.1. Production performance is not impacted.
+  - cxy_regulator gives intermittent failures when running 'make tests'. This is a timing issue in the test itself. Run again and/or stop some CPU intensive operations before running. Hoping to fix this in 1.1.1
 
 Erlang/OTP offers many components for distributed, concurrent, fault-tolerant, non-stop services. Many concurrent systems need common constructs which are not provided in the basic OTP system. This library is an Open Source set of concurrency tools which have been proven in a production environment and are being released publicly in anticipation that community interest and contributions will lead to the most useful tools being submitted for inclusion in Erlang/OTP.
 

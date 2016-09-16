@@ -18,6 +18,10 @@
              ets_buffer,
              cxy_ctl,
              cxy_cache,
+             cxy_cache_fsm,
+             cxy_cache_sup,
              cxy_fount,
-             cxy_regulator
+             cxy_fount_sup,
+             cxy_regulator,
+             cxy_synch
             ]}.
