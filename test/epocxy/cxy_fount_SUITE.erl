@@ -122,15 +122,16 @@ verify_full_fount(Slab_Size, Depth) ->
     true.
     
 start_fount(Behaviour, Slab_Size, Depth) ->
-    Options   = [{slab_size, Slab_Size}, {num_slabs, Depth}],
+    %% Time slice cannot be smaller than 1/500th second
+    Options   = [{slab_size, Slab_Size}, {num_slabs, Depth}, {time_slice, 500}],
     {ok, Sup} = cxy_fount_sup:start_link(Behaviour, [none], Options),
     Fount     = cxy_fount_sup:get_fount(Sup),
     'FULL'    = verify_reservoir_is_full(Fount, Depth),
     {Sup, Fount}.
 
-verify_reservoir_is_full(Fount, Num_Of_Spawn_Slices) ->
-    Time_To_Sleep = (Num_Of_Spawn_Slices + 1) * 20,
-    timer:sleep(Time_To_Sleep),   % 1/100th second per slab
+verify_reservoir_is_full(Fount, Num_Of_Spawn_Slabs) ->
+    Time_To_Sleep = (Num_Of_Spawn_Slabs + 1) * 6,  % 1/167th second wait per slab
+    timer:sleep(Time_To_Sleep),
     Status = ?TM:get_status(Fount),
     Final_State = proplists:get_value(current_state, Status),
     finish_full(Time_To_Sleep, Final_State, Status).
@@ -314,12 +315,12 @@ check_faulty_behaviour(_Config) ->
     try
         Slab_Size = 10, Num_Slabs = 3,
         Behaviour = cxy_fount_fail_behaviour,
-        Fount_Options = [{slab_size, Slab_Size}, {num_slabs, Num_Slabs}],
+        Fount_Options = [{slab_size, Slab_Size}, {num_slabs, Num_Slabs}, {time_slice, 500}],
         {ok, Sup1}    = cxy_fount_sup:start_link(Behaviour, [none], Fount_Options),
         Fount1        = cxy_fount_sup:get_fount(Sup1),
         crashed = bad_pid(Fount1),
 
-        {ok, Sup2}    = cxy_fount_sup:start_link(Behaviour, [none], []),
+        {ok, Sup2}    = cxy_fount_sup:start_link(Behaviour, [none], [{time_slice, 500}]),
         Fount2        = cxy_fount_sup:get_fount(Sup2),
         crashed = bad_pid(Fount2)
 

@@ -414,7 +414,7 @@ get_pdict() ->
     Vals = filter_pdict(),
     receive {From, get_pdict} -> From ! {get_pdict, self(), Vals} after 300 -> pdict_timeout end.
 
-filter_pdict() -> [{K, V} || {{cxy_ctl, K}, V} <- get()].
+filter_pdict() -> lists:sort([{K, V} || {{cxy_ctl, K}, V} <- get()]).
 
 -spec fetch_ages() -> pdict_timeout | {get_pdict, pid(), proplists:proplist()}.
 fetch_ages() -> get_pdict().

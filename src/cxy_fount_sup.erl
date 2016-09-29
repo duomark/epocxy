@@ -95,7 +95,7 @@ init({Fount_Behaviour, Init_Args, Fount_Options})
     Fount_Args     = [self(), Fount_Behaviour, Init_Args, Fount_Options],
     Regulator_Args = case proplists:lookup(time_slice, Fount_Options) of
                          none              -> [];
-                         Time_Slice_Option -> [Time_Slice_Option]
+                         Time_Slice_Option -> [[Time_Slice_Option]]
                      end,
     init_internal(Fount_Args, Regulator_Args);
 
@@ -111,7 +111,7 @@ init({Fount_Name, Fount_Behaviour, Init_Args, Fount_Options})
     Fount_Args     = [self(), Fount_Name, Fount_Behaviour, Init_Args, Fount_Options],
     Regulator_Args = case proplists:lookup(time_slice, Fount_Options) of
                          none              -> [];
-                         Time_Slice_Option -> [Time_Slice_Option]
+                         Time_Slice_Option -> [[Time_Slice_Option]]
                      end,
     init_internal(Fount_Args, Regulator_Args).
 
