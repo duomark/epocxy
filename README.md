@@ -1,8 +1,9 @@
 Erlang Patterns of Concurrency (epocxy)
 =======================================
 
+The version number format epocxy uses is Major.Minor.Rev (e.g., 1.1.0). If the Rev is an even number, this is a release version and will be tagged for builds. If it is an odd number, it is a modification of Master that is under development but available for testing, and will only be marked in the epocxy.app file, not as a tagged version. Only use Master in your dependency if you are testing partial fixes; always use an even number tag starting with 1.1.0 for stable release dependency.
+
 NOTE:
-  - Please use tags when including this library. The master branch may contain partial or incomplete new features if you use the latest HEAD.
   - 'make tests' is significantly slower in 1.1.0 because of cxy_fount PropEr tests. Enchancements are planned to speed testing in 1.1.1. Production performance is not impacted. Update: cxy_fount_SUITE now takes 30 seconds on my laptop, it won't get any faster.
   - cxy_regulator gives intermittent failures when running 'make tests'. This is a timing issue in the test itself. Run again and/or stop some CPU intensive operations before running. Hoping to fix this in 1.1.1
 

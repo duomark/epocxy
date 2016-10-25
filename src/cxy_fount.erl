@@ -204,7 +204,7 @@ parse_options(Fount_Options) ->
             notifier  = proplists:get_value(notifier,  Fount_Options, no_notifier)
            } of
         #parsed_fount_options{slab_size=SS}     when SS =< 0   -> {error, {slab_size, SS}};
-        #parsed_fount_options{num_slabs=NS}     when NS  < 2   -> {error, {num_slabs, NS}};
+        #parsed_fount_options{num_slabs=NS}     when NS  < 3   -> {error, {num_slabs, NS}};
         #parsed_fount_options{notifier=N} = PFO when is_pid(N) -> PFO;
         #parsed_fount_options{notifier=no_notifier} = PFO      -> PFO
     end.
