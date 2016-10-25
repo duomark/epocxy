@@ -86,7 +86,7 @@ check_construction(_Config) ->
     Test = "Check that founts can be constructed and refill fully",
     ct:comment(Test), ct:log(Test),
 
-    Full_Fn = ?FORALL({Slab_Size, Depth}, {range(1,37), range(2,17)},
+    Full_Fn = ?FORALL({Slab_Size, Depth}, {range(1,37), range(3,17)},
                       verify_full_fount(Slab_Size, Depth)),
     true = proper:quickcheck(Full_Fn, ?PQ_NUM(5)),
 
@@ -243,7 +243,7 @@ check_reservoir_refills(_Config) ->
 
     Test_Allocators = 
         ?FORALL({Slab_Size, Depth, Num_Pids},
-                {range(1,20), range(2,10), non_empty(list(range(1, 30)))},
+                {range(1,20), range(3,10), non_empty(list(range(1, 30)))},
                 verify_slab_refills(Slab_Size, Depth, Num_Pids)),
     true = proper:quickcheck(Test_Allocators, ?PQ_NUM(100)),
 

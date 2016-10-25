@@ -6,7 +6,7 @@
 {application, epocxy,
  [
   {id, "epocxy"},
-  {vsn, "1.1.0"},
+  {vsn, "1.1.1"},
   {description, "Erlang Patterns of Concurrency"},
   {modules,      [
                   batch_feeder,
