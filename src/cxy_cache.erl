@@ -577,10 +577,9 @@ determine_newest_version(Cache_Name, Mod, Insert_Vsn, Cached_Vsn) ->
         = case erlang:function_exported(Mod, is_later_version, 2) of
               false -> Insert_Vsn < Cached_Vsn;
               true  -> try Mod:is_later_version(Insert_Vsn, Cached_Vsn)
-                       catch Class:Type -> % The user-supplied function crashed, use the currently cached value.
+                       catch Class:Type:STrace -> % The user-supplied function crashed, use the currently cached value.
                                Msg = "~p:is_later_version on cache ~p crashed: {~p:~p} ~p~n",
-                               error_logger:error_msg(Msg, [Mod, Cache_Name, Class, Type,
-                                                            erlang:get_stacktrace()]),
+                               error_logger:error_msg(Msg, [Mod, Cache_Name, Class, Type, STrace]),
                                true
                        end
           end,

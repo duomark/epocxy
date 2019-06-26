@@ -70,7 +70,7 @@ process_data({Module, _Env} = Context) ->
         done -> done;
         {{First_Batch, Context2}, Continuation_Fn} ->
             process_batch(1, First_Batch, Context2, Continuation_Fn)
-    catch Error:Type -> Args = [?MODULE, Error, Type, erlang:get_stacktrace()],
+    catch Error:Type:STrace -> Args = [?MODULE, Error, Type, STrace],
                         error_logger:error_msg("~p:process_data error {~p,~p}~n~99999p", Args),
                         {error, {first_batch, {1, Error, Type}}}
     end.
@@ -89,8 +89,8 @@ process_batch(Iteration, This_Batch, {Module, _Env} = Context, Continuation_Fn) 
             {{Next_Batch, Context4}, Next_Continuation_Fn} ->
                 process_batch(Iteration+1, Next_Batch, Context4, Next_Continuation_Fn)
         end
-         
-    catch Error:Type -> Args = [?MODULE, Error, Type, erlang:get_stacktrace()],
+
+    catch Error:Type:STrace -> Args = [?MODULE, Error, Type, STrace],
                         error_logger:error_msg("~p:process_batch error {~p,~p}~n~99999p", Args),
                         {error, {prepped_batch, {Iteration, Error, Type}}}
     end.

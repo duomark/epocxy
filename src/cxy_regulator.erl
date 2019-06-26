@@ -11,7 +11,7 @@
 %%%   the rate ensures that the amount of work can be constrained to
 %%%   avoid overloading a VM node.
 %%%
-%%%   The regulator is implemented as a gen_fsm so that it can be
+%%%   The regulator is implemented as a gen_statem so that it can be
 %%%   paused and resumed for maintenance purposes.
 %%% @since 1.1.0
 %%% @end
@@ -19,19 +19,17 @@
 -module(cxy_regulator).
 -author('Jay Nelson <jay@duomark.com>').
 
--behaviour(gen_fsm).
+-behaviour(gen_statem).
 
 
 %%% API
 -export([start_link/0, start_link/1, pause/1, resume/1, status/1]).
 -export([allow_spawn/2]).
 
-%%% gen_fsm callbacks
--export([init/1, format_status/2, handle_sync_event/4,
-         handle_event/3, handle_info/3, code_change/4, terminate/3]).
+%% gen_statem callbacks
+-export([init/1, callback_mode/0, terminate/3, code_change/4, format_status/2]).
 
 %%% state functions
--export(['NORMAL'/2, 'OVERMAX'/2, 'PAUSED'/2]).
 -export(['NORMAL'/3, 'OVERMAX'/3, 'PAUSED'/3]).
 
 -type state_name() :: 'NORMAL' | 'OVERMAX' | 'PAUSED'.
@@ -65,8 +63,8 @@
 -spec start_link()                     -> {ok, regulator_ref()}.
 -spec start_link(proplists:proplist()) -> {ok, regulator_ref()}.
 
-start_link()       -> gen_fsm:start_link(?MODULE,     {[]}, []).
-start_link(Config) -> gen_fsm:start_link(?MODULE, {Config}, []).
+start_link()       -> gen_statem:start_link(?MODULE,     {[]}, []).
+start_link(Config) -> gen_statem:start_link(?MODULE, {Config}, []).
 
 
 -type status_attr() :: {current_state, atom()}   % FSM State function name
@@ -76,14 +74,15 @@ start_link(Config) -> gen_fsm:start_link(?MODULE, {Config}, []).
 -spec resume (regulator_ref()) -> thruput().
 -spec status (regulator_ref()) -> [status_attr(), ...].
 
-pause  (Regulator) -> gen_fsm:sync_send_event(Regulator, pause).
-resume (Regulator) -> gen_fsm:sync_send_event(Regulator, resume).
+pause  (Regulator) -> gen_statem:call(Regulator, pause).
+resume (Regulator) -> gen_statem:call(Regulator, resume).
 
-status (Regulator) -> gen_fsm:sync_send_all_state_event(Regulator, status).
-
+status (Regulator) ->
+  {status, _, _, [_Pdict, _State, _Parent, _Dbg, Status]} = sys:get_status(Regulator),
+  Status.
 
 %%%===================================================================
-%%% gen_fsm callbacks
+%%% gen_statem callbacks
 %%%===================================================================
 
 -spec init({proplists:proplist()}) -> {ok, 'NORMAL', cr_state()}.
@@ -97,8 +96,8 @@ init({Config}) ->
     Slab_Counts = #epoch_slab_counts{slots=make_slot_stats(Num_Slots)},
     {ok, 'NORMAL', #cr_state{slab_counts=Slab_Counts}}.
 
-format_status(_Reason, [_Dict, State]) ->
-    generate_status(State).
+format_status(_Reason, [_Dict, State_Name, State]) ->
+    generate_status(State_Name, State).
 
 generate_status(State_Name, State) ->
     [{current_state, State_Name} | generate_status(State)].
@@ -152,37 +151,62 @@ allow_spawn(Server_Start_Time, #epoch_slab_counts{slots=Slot_Stats} = ESC) ->
 
 
 %%%------------------------------------------------------------------------------
-%%% Asynch state functions (triggered by gen_fsm:send_event/2)
+%%% Asynch state functions (triggered by gen_statem:cast/call/2)
 %%%------------------------------------------------------------------------------
 
--spec 'NORMAL'  (allocate_slab_request(), cr_state()) -> {next_state, 'NORMAL',  cr_state()}.
--spec 'OVERMAX' (allocate_slab_request(), cr_state()) -> {next_state, 'OVERMAX', cr_state()}.
--spec 'PAUSED'  (allocate_slab_request(), cr_state()) -> {next_state, 'PAUSED',  cr_state()}.
+-spec 'NORMAL'  ({call, term()} | cast, allocate_slab_request(), cr_state()) -> term().
+-spec 'OVERMAX' ({call, term()} | cast, allocate_slab_request(), cr_state()) -> term().
+-spec 'PAUSED'  ({call, term()} | cast, allocate_slab_request(), cr_state()) -> term().
 
-%%% Let allocate_slab requests through immediately when 'NORMAL'.
-'NORMAL' (Request, #cr_state{} = State) ->
-    case Request of
-        {allocate_slab, _Args}     -> allocate                 (Request, State); % Pace slab allocation.
-        queued_request             -> pop_pending               (normal, State); % Process queue head.
-        _Unknown                   -> {next_state,             'NORMAL', State}  % Skip silently.
-    end.
+%%% 'NORMAL' means no throttling is occurring
+'NORMAL' ({call, From}, pause, State) -> {next_state, 'PAUSED', State, [{reply, From, paused}]};
+'NORMAL' ({call, From}, Event, State) -> handle_event({call, From}, Event, State);
+
+'NORMAL'(cast, {allocate_slab, Args}, State) ->
+  allocate({allocate_slab, Args}, State);
+
+'NORMAL'(cast, queued_request, State) ->
+  pop_pending(normal, State);
+
+'NORMAL'(cast, _Unknown, _State) ->
+  keep_state_and_data.
+
+%%% 'OVERMAX' means spawning is stopped by the regulator
+'OVERMAX' ({call, From}, pause, State) -> {next_state, 'PAUSED', State, [{reply, From, paused}]};
+'OVERMAX' ({call, From}, Event, State) -> handle_event({call, From}, Event, State);
 
 %%% Queue up requests if 'OVERMAX' or 'PAUSED'.
-'OVERMAX' (Request, #cr_state{} = State) ->
-    case Request of
-        {allocate_slab, _Args}     -> queue_request (Request, 'OVERMAX', State); % Queue all.
-        queued_request             -> pop_pending              (normal,  State); % Process queue head.
-        _Unknown                   -> {next_state,            'OVERMAX', State}  % Skip silently.
-    end.
+'OVERMAX'(cast, {allocate_slab, Args}, State) ->
+  queue_request({allocate_slab, Args}, 'OVERMAX', State);
+
+'OVERMAX'(cast, queued_request, State) ->
+  pop_pending(normal, State);
+
+'OVERMAX'(cast, _Unknown, _State) ->
+  keep_state_and_data.
+
+%%% 'PAUSED' means manually stopped, will resume either 'NORMAL' or 'OVERMAX'
+'PAUSED' ({call, From}, resume, #cr_state{thruput=normal}  = State) ->
+  _ = pace_next_slab(0),
+  {next_state, 'NORMAL', State, [{reply, From, {resumed, normal}}]};
+
+'PAUSED' ({call, From}, resume, #cr_state{thruput=overmax} = State) ->
+  _ = pace_next_slab(0),
+  {next_state, 'OVERMAX', State, [{reply, From, {resumed, overmax}}]};
+
+'PAUSED' ({call, From}, Event, State) ->
+  handle_event({call, From}, Event, State);
 
 %%% Paused swallows queued_request events silently, 'resume' required to restart events.
 %%% Slab requests are queued up even if the queue is currently empty.
-'PAUSED' (Request, #cr_state{} = State) ->
-    case Request of
-        {allocate_slab, _Args}     -> queue_request (Request, 'PAUSED',  State); % Queue all.
-        queued_request             -> {next_state,            'PAUSED',  State}; % Swallowed.
-        _Unknown                   -> {next_state,            'PAUSED',  State}  % Skip silently.
-    end.
+'PAUSED'(cast, {allocate_slab, Args}, State) ->
+  queue_request({allocate_slab, Args}, 'PAUSED', State);
+
+'PAUSED'(cast, queued_request, _State) ->
+  keep_state_and_data;
+
+'PAUSED'(cast, _Unknown, _State) ->
+  keep_state_and_data.
 
 %%%------------------------------------------------------------------------------
 %%% Asynch internal support functions
@@ -216,14 +240,14 @@ pop_pending(normal, #cr_state{pending_requests=PR, slab_counts=Slab_Counts} = St
         %% Something queued, handle it.
         {{value, {_Timestamp, Request}}, PR2} ->
             _ = pace_slab(Num_Slots),
-            'NORMAL' (Request, New_State#cr_state{pending_requests=PR2})
+            'NORMAL'(cast, Request, New_State#cr_state{pending_requests=PR2})
     end.
 
 pace_slab(Num_Slots) -> pace_next_slab(overload_pause_millis(Num_Slots)).
 
-pace_next_slab(           0) -> gen_fsm:send_event(self(), queued_request);
+pace_next_slab(           0) -> gen_statem:cast(self(), queued_request);
 pace_next_slab(Pause_Millis) ->
-    timer:apply_after(Pause_Millis, gen_fsm, send_event, [self(), queued_request]).
+    timer:apply_after(Pause_Millis, gen_statem, cast, [self(), queued_request]).
 
 
 %%% Rely on the client behaviour to create new pids. This means using
@@ -235,78 +259,41 @@ pace_next_slab(Pause_Millis) ->
 %%% complete its task on its own timeline, independently from the fount.
 allocate_slab(Fount_Pid, _Module, _Mod_State, Start_Time, 0, Slab) ->
     Elapsed_Time = timer:now_diff(os:timestamp(), Start_Time),
-    gen_fsm:send_event(Fount_Pid, {slab, Slab, Start_Time, Elapsed_Time});
+    gen_statem:cast(Fount_Pid, {slab, Slab, Start_Time, Elapsed_Time});
 
 allocate_slab(Fount_Pid, Module, Mod_State, Start_Time, Num_To_Spawn, Slab)
  when is_pid(Fount_Pid), is_atom(Module), is_integer(Num_To_Spawn), Num_To_Spawn > 0 ->
 
     %% Module behaviour needs to explicitly link to the parent_pid,
     %% since this function is executing in the caller's process space,
-    %% rather than the gen_fsm of the cxy_fount parent_pid process space.
+    %% rather than the gen_statem of the cxy_fount parent_pid process space.
     case Module:start_pid(Fount_Pid, Mod_State) of
         Allocated_Pid when is_pid(Allocated_Pid) ->
             allocate_slab(Fount_Pid, Module, Mod_State, Start_Time, Num_To_Spawn-1, [Allocated_Pid | Slab])
     end.
 
-
-%%%------------------------------------------------------------------------------
-%%% Synchronous state functions (triggered by gen_fsm:sync_send_event/2,3)
-%%%------------------------------------------------------------------------------
-
--type synch_request() :: pause | resume | status.
-
--spec 'NORMAL'  (synch_request(), {pid(), reference()}, cr_state()) -> {reply, paused | {ignored, any()}, 'NORMAL',  cr_state()}.
--spec 'OVERMAX' (synch_request(), {pid(), reference()}, cr_state()) -> {reply, paused | {ignored, any()}, 'OVERMAX', cr_state()}.
--spec 'PAUSED'  (synch_request(), {pid(), reference()}, cr_state()) -> {reply, {resumed, normal | overmax}
-                                                                                      | {ignored, any()}, 'PAUSED',  cr_state()}.
-
-%%% 'NORMAL' means no throttling is occurring
-'NORMAL' (pause, _From,  #cr_state{} = State) -> {reply, paused,           'PAUSED',  State};
-'NORMAL' (Event, _From,  #cr_state{} = State) -> {reply, {ignored, Event}, 'NORMAL',  State}.
-
-%%% 'OVERMAX' means spawning is stopped by the regulator
-'OVERMAX' (pause, _From, #cr_state{} = State) -> {reply, paused,           'PAUSED',  State};
-'OVERMAX' (Event, _From, #cr_state{} = State) -> {reply, {ignored, Event}, 'OVERMAX', State}.
-
-%%% 'PAUSED' means manually stopped, will resume either 'NORMAL' or 'OVERMAX'
-'PAUSED' (resume, _From, #cr_state{thruput=normal}  = State) -> _ = pace_next_slab(0), {reply, {resumed, normal},  'NORMAL',  State};
-'PAUSED' (resume, _From, #cr_state{thruput=overmax} = State) -> _ = pace_next_slab(0), {reply, {resumed, overmax}, 'OVERMAX', State};
-'PAUSED' (Event,  _From, #cr_state{}                = State) ->                        {reply, {ignored, Event},   'PAUSED',  State}.
-
-
-%%%------------------------------------------------------------------------------
-%%% Synchronous state functions (trigger gen_fsm:sync_send_all_state_event/2)
-%%%------------------------------------------------------------------------------
-
 -type from()     :: {pid(), reference()}.
--type rate()     :: pos_integer().
 -type status()   :: proplists:proplist().
 
--spec handle_sync_event (status, from(), State_Name, State)
+-spec handle_event (status, from(), State)
                         -> {reply, status(), State_Name, State}
                                when State_Name :: state_name(), State :: cr_state().
 
-handle_sync_event (status, _From, State_Name, #cr_state{} = State) ->
-    {reply, generate_status(State_Name, State), State_Name, State};
-handle_sync_event (Event,  _From, State_Name, #cr_state{} = State) ->
-    {reply, {ignored, Event}, State_Name, State}.
-    
+handle_event({call, From}, Event, _State) ->
+  {keep_state_and_data, [{reply, From, {ignored, Event}}]}.
 
 %%%===================================================================
 %%% Unused functions
 %%%===================================================================
 
--spec handle_event (any(), State_Name, State)
-        -> {next_state, State_Name, State} when State_Name :: state_name(), State :: cr_state().
--spec handle_info  (any(), State_Name, State)
-        -> {next_state, State_Name, State} when State_Name :: state_name(), State :: cr_state().
 -spec code_change  (any(), State_Name, State, any())
         -> {ok,         State_Name, State} when State_Name :: state_name(), State :: cr_state().
-
-handle_event (_Event,   State_Name,  State) -> {next_state, State_Name, State}.
-handle_info  (_Info,    State_Name,  State) -> {next_state, State_Name, State}.
 code_change  (_OldVsn,  State_Name,  State, _Extra) -> {ok, State_Name, State}.
 
 %%% Pre-spawned pids are linked and die when FSM dies.
 -spec terminate(atom(), state_name(), cr_state()) -> ok.
 terminate(_Reason, _State_Name,  _State) -> ok.
+
+-spec callback_mode() -> atom().
+callback_mode() ->
+  state_functions.
