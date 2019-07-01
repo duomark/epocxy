@@ -11,3 +11,5 @@ logs
 *~
 .erlang.mk
 .erlang.mk.packages.*
+_build
+rebar.lock
