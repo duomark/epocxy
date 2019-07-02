@@ -185,7 +185,7 @@ check_add_slabs(Config) ->
     ct:comment(Test_Complete), ct:log(Test_Complete),
     ok.
 
-validate_msg(Config, Num_Pids, Pid_Num, {'$gen_event', {slab, Pids, _Time_Stamp, Elapsed}}) ->
+validate_msg(Config, Num_Pids, Pid_Num, {'$gen_cast', {slab, Pids, _Time_Stamp, Elapsed}}) ->
     Time_Slice        = proplists:get_value(time_slice, Config),
     Time_Slice_Millis = timer:seconds(1) div Time_Slice,
     Num_Pids          = length([Pid || Pid <- Pids, is_pid(Pid)]),
@@ -206,7 +206,7 @@ receive_add_slab(Config, Regulator, Slab_Size, Num_Slabs) ->
     Self       = self(),
     Fake_Fount = spawn_link(fun() -> fake_fount(Self, []) end),
     Cmd        = allocate_slab_cmd(Fake_Fount, Slab_Size),
-    _ = [gen_fsm:send_event(Regulator, Cmd) || _N <- lists:seq(1, Num_Slabs)],
+    _ = [gen_statem:cast(Regulator, Cmd) || _N <- lists:seq(1, Num_Slabs)],
     wait_for_add_slab(Config, Fake_Fount, Regulator).
 
 allocate_slab_cmd(Fount, Slab_Size) ->

@@ -547,11 +547,11 @@ execute_wrapper(Mod, Fun, Args, Task_Type, _Max_History, false, Spawn_Or_Inline,
     Result = try
                  _ = [put(Key, Val) || {Key, Val} <- Dict_Prop_Pairs],
                  apply(Mod, Fun, Args)
-             catch Error:Type -> {error, {mfa_failure, {{Error, Type}, {Mod, Fun, Args}, Task_Type, Spawn_Or_Inline}}}
+             catch Error:Type:STrace -> {error, {mfa_failure, {{Error, Type}, {Mod, Fun, Args}, Task_Type, Spawn_Or_Inline}}, STrace}
              after decr_active_procs(Task_Type)
              end,
     case Result of
-        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data, erlang:get_stacktrace());
+        {error, Call_Data, Trace} -> fail_wrapper(Spawn_Or_Inline, Call_Data, Trace);
         Result             -> Result
     end;
 
@@ -562,7 +562,7 @@ execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, Spawn_Or_Inline, 
     Result = try
                  _ = [put(Key, Val) || {Key, Val} <- Dict_Prop_Pairs],
                  apply(Mod, Fun, Args)
-             catch Error:Type -> {error, {mfa_failure, {{Error, Type}, MFA, Task_Type, Max_History, Start, Spawn_Or_Inline}}}
+             catch Error:Type:STrace -> {error, {mfa_failure, {{Error, Type}, MFA, Task_Type, Max_History, Start, Spawn_Or_Inline}}, STrace}
              after
                  decr_active_procs(Task_Type),
                  case Spawn_Or_Inline of
@@ -571,7 +571,7 @@ execute_wrapper(Mod, Fun, Args, Task_Type, Max_History, Start, Spawn_Or_Inline, 
                  end
              end,
     case Result of
-        {error, Call_Data} -> fail_wrapper(Spawn_Or_Inline, Call_Data, erlang:get_stacktrace());
+        {error, Call_Data, Trace} -> fail_wrapper(Spawn_Or_Inline, Call_Data, Trace);
         Result             -> Result
     end.
 
