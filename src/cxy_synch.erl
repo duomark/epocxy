@@ -21,7 +21,7 @@
          cleanup_star_pattern/2
         ]).
 
--include("tracing_levels.hrl").
+-include("../include/tracing_levels.hrl").
 
 -type pid_count()   :: non_neg_integer().
 -type timeout_ms()  :: pos_integer().

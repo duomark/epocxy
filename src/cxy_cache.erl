@@ -88,7 +88,7 @@
 -export_type([gen1_hit_count/0, gen2_hit_count/0, delete_count/0, refresh_count/0,
               fetch_count/0, error_count/0, miss_count/0]).
 
--include("cxy_cache.hrl").
+-include("../include/cxy_cache.hrl").
 
 
 %%%------------------------------------------------------------------------------
